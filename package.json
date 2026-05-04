@@ -4,8 +4,8 @@
   "description": "Simple TypeScript trading scripts for local and server use",
   "private": true,
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts"
+    "start": "source .env && tsx src/index.ts",
+    "dev": "source .env && tsx watch src/index.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
