@@ -18,7 +18,7 @@ export function fetchBuySignals(
       operation_advice, trend_prediction, analysis_summary,
       ideal_buy, secondary_buy, stop_loss, take_profit, created_at
     FROM analysis_history
-    WHERE created_at >= datetime('now', '-24 hours')
+    WHERE created_at >= datetime('now', '-12 hours')
       AND operation_advice LIKE '%买入%'
       AND ideal_buy IS NOT NULL
       AND code NOT GLOB '[036][0-9][0-9][0-9][0-9][0-9]'
@@ -39,7 +39,7 @@ export function fetchRecentReports(dbPath: string): AnalysisRecord[] {
       operation_advice, trend_prediction, analysis_summary,
       ideal_buy, secondary_buy, stop_loss, take_profit, created_at
     FROM analysis_history
-    WHERE created_at >= datetime('now', '-24 hours')
+    WHERE created_at >= datetime('now', '-12 hours')
       AND code NOT GLOB '[036][0-9][0-9][0-9][0-9][0-9]'
     ORDER BY created_at DESC
   `).all() as unknown as AnalysisRecord[];

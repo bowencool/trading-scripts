@@ -7,7 +7,7 @@ import { getSubmittedRecordIds } from "./lib/tracker.js";
 import type { AnalysisRecord, TradeSignal } from "./lib/types.js";
 
 function printReports(reports: AnalysisRecord[]): void {
-  console.log(`\n📊 最近 24 小时分析报告 (共 ${reports.length} 条)\n`);
+  console.log(`\n📊 最近 12 小时分析报告 (共 ${reports.length} 条)\n`);
   console.log("─".repeat(100));
 
   for (const r of reports) {
