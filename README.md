@@ -43,8 +43,8 @@ CLIENT_ID=your-client-id-here
 
 # 选填
 DB_PATH=./stock_analysis.db       # SQLite 数据库路径
-PRICE_THRESHOLD_PCT=2             # 价格阈值百分比（当前价 <= 目标价 * (1 + N%) 时下单）
-POSITION_PCT=20                   # 单个持仓占账户净资产的百分比
+PRICE_THRESHOLD_PCT=1             # 价格阈值百分比（当前价 <= 目标价 * (1 + N%) 时下单）
+POSITION_PCT=10                   # 单个持仓占账户净资产的百分比
 ```
 
 ### 4. 运行

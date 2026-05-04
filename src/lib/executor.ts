@@ -44,6 +44,14 @@ async function promptConfirm(message: string): Promise<boolean> {
   });
 }
 
+function getCurrency(symbol: string): string {
+  if (symbol.endsWith(".HK")) return "HKD";
+  if (symbol.endsWith(".US")) return "USD";
+  if (symbol.endsWith(".SH") || symbol.endsWith(".SZ")) return "CNY";
+  if (symbol.endsWith(".SG")) return "SGD";
+  return "HKD";
+}
+
 export async function executeSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal
@@ -53,11 +61,13 @@ export async function executeSignal(
   // Display analysis record
   printAnalysisRecord(signal.record);
 
+  const currency = getCurrency(signal.symbol);
+
   // Get current price, lot size, and account balance in parallel
   const [quotes, staticInfos, balances] = await Promise.all([
     quoteCtx.quote([signal.symbol]),
     quoteCtx.staticInfo([signal.symbol]),
-    tradeCtx.accountBalance(),
+    tradeCtx.accountBalance(currency),
   ]);
 
   if (quotes.length === 0) {
@@ -80,20 +90,20 @@ export async function executeSignal(
   // Calculate quantity based on account net assets * positionPct%
   const netAssets = balances.length > 0 ? Number(balances[0].netAssets.toString()) : 0;
   if (netAssets <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产`);
+    console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产（货币: ${currency}）`);
     return null;
   }
   const maxPositionValue = netAssets * positionPct / 100;
   const qty = Math.floor(maxPositionValue / currentPriceNum / lotSize) * lotSize;
   if (qty <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`);
+    console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`);
     return null;
   }
 
   // Print trade plan
   console.log(`\n📋 交易计划:`);
   console.log(`   标的: ${signal.symbol} | 当前价: ${currentPriceNum} | 目标价: ${signal.targetPrice}`);
-  console.log(`   账户净资产: ${netAssets.toFixed(0)} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)}`);
+  console.log(`   账户净资产: ${netAssets.toFixed(0)} ${currency} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`);
   console.log(`   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`);
   if (signal.stopLoss) {
     console.log(`   止损: ${signal.stopLoss} (MIT 市价触单)`);
