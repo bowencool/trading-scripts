@@ -3,6 +3,7 @@ import { buildConfig } from "./lib/auth.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
 import { fetchBuySignals, fetchRecentReports } from "./lib/db.js";
 import { executeSignal } from "./lib/executor.js";
+import { OrderWatcher } from "./lib/order-watcher.js";
 import { getSubmittedRecordIds, loadTrackedOrders, removeOrder } from "./lib/tracker.js";
 import type { AnalysisRecord, TradeSignal } from "./lib/types.js";
 
@@ -239,16 +240,36 @@ async function main(): Promise<void> {
     const quoteCtx = QuoteContext.new(config);
     const tradeCtx = TradeContext.new(config);
 
+    // Start WebSocket order push listener
+    const orderWatcher = new OrderWatcher(tradeCtx);
+    await orderWatcher.start();
+
     // Auto-cleanup orphaned orders before trading
     await cleanupOrphanedOrders(tradeCtx);
 
     // Auto-cleanup OCO pairs (cancel the surviving order when its pair has filled)
     await cleanupOcoOrders(tradeCtx);
 
-    const execConfig = { quoteCtx, tradeCtx, force: isForce, positionPct, priceThresholdPct };
+    // Register remaining OCO pairs with the watcher for real-time monitoring
+    const remainingOrders = loadTrackedOrders();
+    const seen = new Set<string>();
+    for (const o of remainingOrders) {
+      if (o.ocoPairOrderId && !seen.has(o.orderId)) {
+        seen.add(o.orderId);
+        seen.add(o.ocoPairOrderId);
+        orderWatcher.watchOcoPair(o.orderId, o.ocoPairOrderId);
+        console.log(`[WS] OCO 实时监控已注册: ${o.orderId} ↔ ${o.ocoPairOrderId}`);
+      }
+    }
+
+    const execConfig = { quoteCtx, tradeCtx, orderWatcher, force: isForce, positionPct, priceThresholdPct };
     for (const signal of signals) {
       await executeSignal(execConfig, signal);
     }
+
+    // Keep the process alive briefly to allow any final OCO pushes to be processed
+    await new Promise((r) => setTimeout(r, 2000));
+    await orderWatcher.stop();
   }
 }
 
