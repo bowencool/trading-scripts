@@ -47,9 +47,6 @@ async function main(): Promise<void> {
     const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
     const positionPct = Number(process.env.POSITION_PCT || "20");
 
-    console.log("\n🔐 正在连接 Longbridge...");
-    const config = await buildConfig(clientId);
-
     const submittedIds = getSubmittedRecordIds();
     const records = fetchBuySignals(dbPath, [...submittedIds]);
 
@@ -77,6 +74,8 @@ async function main(): Promise<void> {
       return;
     }
 
+    console.log("🔐 正在连接 Longbridge...");
+    const config = await buildConfig(clientId);
     const quoteCtx = QuoteContext.new(config);
     const tradeCtx = TradeContext.new(config);
     const execConfig = { quoteCtx, tradeCtx, force: isForce, positionPct, priceThresholdPct };
