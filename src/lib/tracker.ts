@@ -17,6 +17,15 @@ export function loadTrackedOrders(): TrackedOrder[] {
 export function trackOrder(order: TrackedOrder): void {
   const orders = loadTrackedOrders();
   orders.push(order);
+  saveOrders(orders);
+}
+
+export function removeOrder(orderId: string): void {
+  const orders = loadTrackedOrders().filter((o) => o.orderId !== orderId);
+  saveOrders(orders);
+}
+
+function saveOrders(orders: TrackedOrder[]): void {
   // Atomic write: write to temp file first, then rename
   const tmpFile = `${TRACKER_FILE}.tmp`;
   writeFileSync(tmpFile, JSON.stringify(orders, null, 2), "utf-8");

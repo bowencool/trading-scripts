@@ -5,10 +5,24 @@ import {
   OrderType,
   OrderSide,
   TimeInForceType,
+  OrderStatus,
 } from "longbridge";
 import { createInterface } from "node:readline";
 import type { TradeSignal, AnalysisRecord } from "./types.js";
 import { trackOrder } from "./tracker.js";
+
+function orderStatusName(status: OrderStatus): string {
+  switch (status) {
+    case OrderStatus.Filled: return "Filled";
+    case OrderStatus.Canceled: return "Canceled";
+    case OrderStatus.Rejected: return "Rejected";
+    case OrderStatus.Expired: return "Expired";
+    case OrderStatus.New: return "New";
+    case OrderStatus.PartialFilled: return "PartialFilled";
+    case OrderStatus.NotReported: return "NotReported";
+    default: return `Status(${status})`;
+  }
+}
 
 export interface ExecutorConfig {
   quoteCtx: QuoteContext;
@@ -156,10 +170,43 @@ export async function executeSignal(
     role: "buy",
   });
 
+  // Poll buy order until terminal state before submitting SL/TP
+  // This prevents "ghost orders" — SL/TP remaining active after buy order
+  // expires/fails, which could cause unintended short positions.
+  const POLL_INTERVAL_MS = 5_000;
+  const MAX_POLLS = 60; // 5 minutes max
+  let buyFilled = false;
+
+  console.log(`[WAIT] 等待买单 ${buyOrderId} 成交确认...`);
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const detail = await tradeCtx.orderDetail(buyOrderId);
+    const status = detail.status;
+
+    if (status === OrderStatus.Filled) {
+      buyFilled = true;
+      console.log(`[OK] 买单已成交: ${buyOrderId}`);
+      break;
+    }
+    if (status === OrderStatus.Canceled || status === OrderStatus.Rejected || status === OrderStatus.Expired) {
+      console.log(`[SKIP] 买单未成交 (状态: ${orderStatusName(status)})，跳过止损/止盈`);
+      return null;
+    }
+    if (i % 6 === 5) {
+      const elapsed = ((i + 1) * POLL_INTERVAL_MS) / 1000;
+      console.log(`[WAIT] 买单仍未成交 (${elapsed}s, 状态: ${orderStatusName(status)})...`);
+    }
+  }
+
+  if (!buyFilled) {
+    console.log(`[WARN] 轮询超时 (${(MAX_POLLS * POLL_INTERVAL_MS) / 1000}s)，买单状态未知。跳过止损/止盈以防幽灵订单。`);
+    return null;
+  }
+
   let stopLossOrderId: string | undefined;
   let takeProfitOrderId: string | undefined;
 
-  // Submit stop-loss order (MIT)
+  // Submit stop-loss order (MIT) — only after buy order is confirmed filled
   if (signal.stopLoss) {
     try {
       const slResp = await tradeCtx.submitOrder({
