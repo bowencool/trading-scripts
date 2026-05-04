@@ -14,7 +14,7 @@ export interface ExecutorConfig {
   quoteCtx: QuoteContext;
   tradeCtx: TradeContext;
   force: boolean;
-  maxPositionValue: number;
+  positionPct: number;
   priceThresholdPct: number;
 }
 
@@ -48,15 +48,16 @@ export async function executeSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal
 ): Promise<{ buyOrderId: string; stopLossOrderId?: string; takeProfitOrderId?: string } | null> {
-  const { quoteCtx, tradeCtx, force, maxPositionValue, priceThresholdPct } = execConfig;
+  const { quoteCtx, tradeCtx, force, positionPct, priceThresholdPct } = execConfig;
 
   // Display analysis record
   printAnalysisRecord(signal.record);
 
-  // Get current price and lot size in parallel
-  const [quotes, staticInfos] = await Promise.all([
+  // Get current price, lot size, and account balance in parallel
+  const [quotes, staticInfos, balances] = await Promise.all([
     quoteCtx.quote([signal.symbol]),
     quoteCtx.staticInfo([signal.symbol]),
+    tradeCtx.accountBalance(),
   ]);
 
   if (quotes.length === 0) {
@@ -76,17 +77,24 @@ export async function executeSignal(
     return null;
   }
 
-  // Calculate quantity
+  // Calculate quantity based on account net assets * positionPct%
+  const netAssets = balances.length > 0 ? Number(balances[0].netAssets.toString()) : 0;
+  if (netAssets <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产`);
+    return null;
+  }
+  const maxPositionValue = netAssets * positionPct / 100;
   const qty = Math.floor(maxPositionValue / currentPriceNum / lotSize) * lotSize;
   if (qty <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（最大持仓金额 ${maxPositionValue} 不足一手）`);
+    console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`);
     return null;
   }
 
   // Print trade plan
   console.log(`\n📋 交易计划:`);
   console.log(`   标的: ${signal.symbol} | 当前价: ${currentPriceNum} | 目标价: ${signal.targetPrice}`);
-  console.log(`   方向: 买入 | 数量: ${qty} | 订单类型: 限价单 (LO)`);
+  console.log(`   账户净资产: ${netAssets.toFixed(0)} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)}`);
+  console.log(`   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`);
   if (signal.stopLoss) {
     console.log(`   止损: ${signal.stopLoss} (MIT 市价触单)`);
   }

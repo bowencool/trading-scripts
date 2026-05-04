@@ -44,7 +44,7 @@ CLIENT_ID=your-client-id-here
 # 选填
 DB_PATH=./stock_analysis.db       # SQLite 数据库路径
 PRICE_THRESHOLD_PCT=2             # 价格阈值百分比（当前价 <= 目标价 * (1 + N%) 时下单）
-MAX_POSITION_VALUE=10000          # 单个持仓最大金额（HKD/USD）
+POSITION_PCT=20                   # 单个持仓占账户净资产的百分比
 ```
 
 ### 4. 运行
@@ -97,5 +97,5 @@ src/
 | `CLIENT_ID` | 是 | - | Longbridge OAuth client ID |
 | `DB_PATH` | 否 | `./stock_analysis.db` | SQLite 数据库路径 |
 | `PRICE_THRESHOLD_PCT` | 否 | `2` | 当前价超出目标价此百分比内仍下单 |
-| `MAX_POSITION_VALUE` | 否 | `10000` | 单个持仓最大金额（HKD 港股 / USD 美股） |
+| `POSITION_PCT` | 否 | `20` | 单个持仓占账户净资产的百分比 |
 
