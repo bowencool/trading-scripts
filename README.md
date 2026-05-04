@@ -12,13 +12,13 @@
 
 ```bash
 # 安装依赖（仅 TypeScript 工具链，无框架）
-npm install
+pnpm install
 
 # 运行示例脚本
-npm start
+pnpm start
 
 # 开发模式（文件改动自动重新运行）
-npm run dev
+pnpm dev
 ```
 
 ### 示例输出
