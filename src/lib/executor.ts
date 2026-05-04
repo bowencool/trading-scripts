@@ -9,7 +9,7 @@ import {
 } from "longbridge";
 import { createInterface } from "node:readline";
 import type { TradeSignal, AnalysisRecord } from "./types.js";
-import { trackOrder } from "./tracker.js";
+import { trackOrder, linkOcoOrders } from "./tracker.js";
 
 function orderStatusName(status: OrderStatus): string {
   switch (status) {
@@ -271,6 +271,12 @@ export async function executeSignal(
     } catch (err) {
       console.error(`[WARN] 止盈单提交失败: ${err}`);
     }
+  }
+
+  // Link SL/TP as OCO pair — filling one cancels the other
+  if (stopLossOrderId && takeProfitOrderId) {
+    linkOcoOrders(stopLossOrderId, takeProfitOrderId);
+    console.log(`[OK] OCO 已关联: 止损 ${stopLossOrderId} ↔ 止盈 ${takeProfitOrderId}`);
   }
 
   return { buyOrderId, stopLossOrderId, takeProfitOrderId };

@@ -35,4 +35,6 @@ export interface TrackedOrder {
   signalRecordId: number;
   role: "buy" | "stop_loss" | "take_profit";
   linkedBuyOrderId?: string;
+  /** When set, this order and the one at ocoPairOrderId form an OCO pair — filling one cancels the other. */
+  ocoPairOrderId?: string;
 }

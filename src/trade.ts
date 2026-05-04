@@ -6,6 +6,16 @@ import { executeSignal } from "./lib/executor.js";
 import { getSubmittedRecordIds, loadTrackedOrders, removeOrder } from "./lib/tracker.js";
 import type { AnalysisRecord, TradeSignal } from "./lib/types.js";
 
+/** Terminal states where the order is no longer active on the exchange. */
+function isTerminal(status: OrderStatus): boolean {
+  return (
+    status === OrderStatus.Filled ||
+    status === OrderStatus.Canceled ||
+    status === OrderStatus.Rejected ||
+    status === OrderStatus.Expired
+  );
+}
+
 function printReports(reports: AnalysisRecord[]): void {
   console.log(`\n📊 最近 12 小时分析报告 (共 ${reports.length} 条)\n`);
   console.log("─".repeat(100));
@@ -64,6 +74,94 @@ async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
   }
 }
 
+/**
+ * OCO cleanup: for each SL/TP order that has an ocoPairOrderId,
+ * check if the pair has been filled. If so, cancel this order.
+ * This prevents the scenario where SL triggers → stock sold → TP still live → unintended short.
+ */
+async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
+  console.log("🔗 检查 OCO 互斥订单...");
+  const orders = loadTrackedOrders();
+  const ocoOrders = orders.filter(
+    (o) => (o.role === "stop_loss" || o.role === "take_profit") && o.ocoPairOrderId
+  );
+
+  if (ocoOrders.length === 0) {
+    console.log("✅ 无 OCO 订单");
+    return;
+  }
+
+  // Deduplicate: each pair appears twice (A→B and B→A), only process once
+  const processed = new Set<string>();
+  let ocoCleaned = 0;
+
+  for (const order of ocoOrders) {
+    const pairId = order.ocoPairOrderId!;
+    const pairKey = [order.orderId, pairId].sort().join(":");
+    if (processed.has(pairKey)) continue;
+    processed.add(pairKey);
+
+    try {
+      const [detail, pairDetail] = await Promise.all([
+        tradeCtx.orderDetail(order.orderId),
+        tradeCtx.orderDetail(pairId),
+      ]);
+
+      // If both already in terminal state, just clean up tracking
+      if (isTerminal(detail.status) && isTerminal(pairDetail.status)) {
+        if (detail.status === OrderStatus.Filled || pairDetail.status === OrderStatus.Filled) {
+          console.log(
+            `[OCO] 订单 ${order.orderId} (${order.role}) 与 ${pairId} 均已结束，清理跟踪记录`
+          );
+          removeOrder(order.orderId);
+          removeOrder(pairId);
+          ocoCleaned++;
+        }
+        continue;
+      }
+
+      // If this order is filled but pair is still active → cancel pair
+      if (detail.status === OrderStatus.Filled && !isTerminal(pairDetail.status)) {
+        try {
+          await tradeCtx.cancelOrder(pairId);
+          console.log(
+            `[OCO] ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId} 已成交，取消对端 ${pairId}`
+          );
+          removeOrder(order.orderId);
+          removeOrder(pairId);
+          ocoCleaned++;
+        } catch (err) {
+          console.error(`[WARN] OCO 取消对端 ${pairId} 失败: ${err}`);
+        }
+        continue;
+      }
+
+      // If pair is filled but this order is still active → cancel this order
+      if (pairDetail.status === OrderStatus.Filled && !isTerminal(detail.status)) {
+        try {
+          await tradeCtx.cancelOrder(order.orderId);
+          console.log(
+            `[OCO] 对端 ${pairId} 已成交，取消 ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId}`
+          );
+          removeOrder(order.orderId);
+          removeOrder(pairId);
+          ocoCleaned++;
+        } catch (err) {
+          console.error(`[WARN] OCO 取消订单 ${order.orderId} 失败: ${err}`);
+        }
+      }
+    } catch (err) {
+      console.error(`[WARN] OCO 查询订单 ${order.orderId}/${pairId} 失败: ${err}`);
+    }
+  }
+
+  if (ocoCleaned > 0) {
+    console.log(`✅ OCO 清理完成，处理 ${ocoCleaned} 对`);
+  } else {
+    console.log("✅ 无需处理的 OCO 订单");
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const isTradeMode = args.includes("--trade");
@@ -86,6 +184,7 @@ async function main(): Promise<void> {
     const config = await buildConfig(clientId);
     const tradeCtx = TradeContext.new(config);
     await cleanupOrphanedOrders(tradeCtx);
+    await cleanupOcoOrders(tradeCtx);
     return;
   }
 
@@ -142,6 +241,9 @@ async function main(): Promise<void> {
 
     // Auto-cleanup orphaned orders before trading
     await cleanupOrphanedOrders(tradeCtx);
+
+    // Auto-cleanup OCO pairs (cancel the surviving order when its pair has filled)
+    await cleanupOcoOrders(tradeCtx);
 
     const execConfig = { quoteCtx, tradeCtx, force: isForce, positionPct, priceThresholdPct };
     for (const signal of signals) {

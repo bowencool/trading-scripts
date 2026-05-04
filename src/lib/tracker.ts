@@ -36,3 +36,19 @@ export function getSubmittedRecordIds(): Set<number> {
   const orders = loadTrackedOrders();
   return new Set(orders.filter((o) => o.role === "buy").map((o) => o.signalRecordId));
 }
+
+/** Link two orders as an OCO pair so that filling one cancels the other. */
+export function linkOcoOrders(orderId1: string, orderId2: string): void {
+  const orders = loadTrackedOrders();
+  let changed = false;
+  for (const o of orders) {
+    if (o.orderId === orderId1) {
+      o.ocoPairOrderId = orderId2;
+      changed = true;
+    } else if (o.orderId === orderId2) {
+      o.ocoPairOrderId = orderId1;
+      changed = true;
+    }
+  }
+  if (changed) saveOrders(orders);
+}
