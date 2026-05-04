@@ -25,6 +25,45 @@ function printReports(reports: AnalysisRecord[]): void {
   }
 }
 
+async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
+  console.log("🧹 清理孤儿订单...");
+  const orders = loadTrackedOrders();
+  const slTpOrders = orders.filter((o) => o.role === "stop_loss" || o.role === "take_profit");
+  const buyOrderIds = new Set(orders.filter((o) => o.role === "buy").map((o) => o.orderId));
+
+  let cleaned = 0;
+  for (const slTp of slTpOrders) {
+    if (!slTp.linkedBuyOrderId || !buyOrderIds.has(slTp.linkedBuyOrderId)) {
+      try {
+        await tradeCtx.cancelOrder(slTp.orderId);
+        console.log(`[CANCEL] 已取消孤立订单 ${slTp.orderId} (${slTp.role}, ${slTp.symbol})`);
+        removeOrder(slTp.orderId);
+        cleaned++;
+      } catch (err) {
+        console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
+      }
+      continue;
+    }
+    try {
+      const buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId);
+      if (buyDetail.status === OrderStatus.Canceled || buyDetail.status === OrderStatus.Expired || buyDetail.status === OrderStatus.Rejected) {
+        await tradeCtx.cancelOrder(slTp.orderId);
+        const statusName = buyDetail.status === OrderStatus.Canceled ? "Canceled" : buyDetail.status === OrderStatus.Expired ? "Expired" : "Rejected";
+        console.log(`[CANCEL] 买单 ${slTp.linkedBuyOrderId} 已${statusName}，取消关联订单 ${slTp.orderId} (${slTp.role})`);
+        removeOrder(slTp.orderId);
+        cleaned++;
+      }
+    } catch (err) {
+      console.error(`[WARN] 查询买单 ${slTp.linkedBuyOrderId} 失败: ${err}`);
+    }
+  }
+  if (cleaned > 0) {
+    console.log(`✅ 清理完成，共取消 ${cleaned} 个孤儿订单`);
+  } else {
+    console.log("✅ 无孤儿订单");
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const isTradeMode = args.includes("--trade");
@@ -37,48 +76,16 @@ async function main(): Promise<void> {
   const reports = fetchRecentReports(dbPath);
   printReports(reports);
 
-  // If cleanup mode, cancel orphaned SL/TP orders
+  // Standalone cleanup mode
   if (isCleanup) {
     const clientId = process.env.CLIENT_ID;
     if (!clientId) {
       console.error("错误: 请在 .env 中设置 CLIENT_ID");
       process.exit(1);
     }
-    console.log("🧹 清理孤儿订单...");
     const config = await buildConfig(clientId);
     const tradeCtx = TradeContext.new(config);
-
-    const orders = loadTrackedOrders();
-    const slTpOrders = orders.filter((o) => o.role === "stop_loss" || o.role === "take_profit");
-    const buyOrderIds = new Set(orders.filter((o) => o.role === "buy").map((o) => o.orderId));
-
-    for (const slTp of slTpOrders) {
-      // Check if linked buy order still exists and is active
-      if (!slTp.linkedBuyOrderId || !buyOrderIds.has(slTp.linkedBuyOrderId)) {
-        try {
-          await tradeCtx.cancelOrder(slTp.orderId);
-          console.log(`[CANCEL] 已取消孤立订单 ${slTp.orderId} (${slTp.role}, ${slTp.symbol})`);
-          removeOrder(slTp.orderId);
-        } catch (err) {
-          console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
-        }
-        continue;
-      }
-
-      // Check buy order status
-      try {
-        const buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId);
-        if (buyDetail.status === OrderStatus.Canceled || buyDetail.status === OrderStatus.Expired || buyDetail.status === OrderStatus.Rejected) {
-          await tradeCtx.cancelOrder(slTp.orderId);
-          const statusName = buyDetail.status === OrderStatus.Canceled ? "Canceled" : buyDetail.status === OrderStatus.Expired ? "Expired" : "Rejected";
-          console.log(`[CANCEL] 买单 ${slTp.linkedBuyOrderId} 已${statusName}，取消关联订单 ${slTp.orderId} (${slTp.role})`);
-          removeOrder(slTp.orderId);
-        }
-      } catch (err) {
-        console.error(`[WARN] 查询买单 ${slTp.linkedBuyOrderId} 失败: ${err}`);
-      }
-    }
-    console.log("✅ 清理完成");
+    await cleanupOrphanedOrders(tradeCtx);
     return;
   }
 
@@ -132,6 +139,10 @@ async function main(): Promise<void> {
     const config = await buildConfig(clientId);
     const quoteCtx = QuoteContext.new(config);
     const tradeCtx = TradeContext.new(config);
+
+    // Auto-cleanup orphaned orders before trading
+    await cleanupOrphanedOrders(tradeCtx);
+
     const execConfig = { quoteCtx, tradeCtx, force: isForce, positionPct, priceThresholdPct };
     for (const signal of signals) {
       await executeSignal(execConfig, signal);

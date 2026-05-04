@@ -7,7 +7,9 @@
 - 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
 - 自动过滤 A 股，仅处理港股和美股标的
 - 通过 Longbridge SDK 自动提交买入限价单
+- 等待买单成交确认后再提交止损/止盈，防止幽灵订单
 - 自动设置止损单（MIT）和止盈单（LIT）
+- 孤儿订单清理（`--cleanup`），自动取消无父订单的止损/止盈
 - 订单追踪，防止重复下单
 - 支持人工确认和全自动两种模式
 
@@ -58,6 +60,9 @@ pnpm trade
 
 # 全自动模式（跳过确认）
 pnpm trade:force
+
+# 清理孤儿订单（取消无父订单的止损/止盈）
+pnpm trade:cleanup
 ```
 
 首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 会缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
@@ -71,7 +76,9 @@ pnpm trade:force
     ↓
 展示交易计划 + 分析记录 → 人工确认（--force 跳过）
     ↓
-提交买入限价单 (LO) → 提交止损单 (MIT) → 提交止盈单 (LIT)
+提交买入限价单 (LO) → 轮询等待成交确认
+    ↓
+买单成交后 → 提交止损单 (MIT) → 提交止盈单 (LIT)
     ↓
 记录到 submitted_orders.json（防重复）
 ```

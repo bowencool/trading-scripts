@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx --env-file=.env src/trade.ts",
     "trade": "tsx --env-file=.env src/trade.ts --trade",
-    "trade:force": "tsx --env-file=.env src/trade.ts --trade --force"
+    "trade:force": "tsx --env-file=.env src/trade.ts --trade --force",
+    "trade:cleanup": "tsx --env-file=.env src/trade.ts --cleanup"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
