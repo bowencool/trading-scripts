@@ -1,51 +1,101 @@
 # trading-scripts
 
-一个非常简单的 TypeScript 脚本，运行在本地和服务器，**不需要安装任何框架**。
+基于 [Longbridge OpenAPI](https://open.longbridge.com) 的自动交易脚本，读取股票分析报告并自动执行买卖下单。
 
 ## 功能
 
-- 从 Binance 公开 API 拉取 K 线数据（无需 API key）
-- 计算简单移动平均线（SMA7 / SMA25）
-- 输出多空信号
+- 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
+- 自动过滤 A 股，仅处理港股和美股标的
+- 通过 Longbridge SDK 自动提交买入限价单
+- 自动设置止损单（MIT）和止盈单（LIT）
+- 订单追踪，防止重复下单
+- 支持人工确认和全自动两种模式
 
 ## 快速开始
 
-```bash
-# 安装依赖（仅 TypeScript 工具链，无框架）
-pnpm install
+### 1. 安装依赖
 
-# 运行示例脚本
+```bash
+pnpm install
+```
+
+### 2. 注册 OAuth Client
+
+```bash
+curl -X POST https://openapi.longbridge.com/oauth2/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "Trading Scripts",
+    "redirect_uris": ["http://localhost:60355/callback"],
+    "grant_types": ["authorization_code", "refresh_token"]
+  }'
+```
+
+保存返回的 `client_id`。
+
+### 3. 配置环境变量
+
+复制 `.env.example` 或直接编辑 `.env`：
+
+```bash
+# 必填：Longbridge OAuth client ID
+CLIENT_ID=your-client-id-here
+
+# 选填
+DB_PATH=./stock_analysis.db       # SQLite 数据库路径
+PRICE_THRESHOLD_PCT=2             # 价格阈值百分比（当前价 <= 目标价 * (1 + N%) 时下单）
+MAX_POSITION_VALUE=10000          # 单个持仓最大金额（HKD/USD）
+```
+
+### 4. 运行
+
+```bash
+# 仅查看分析报告
 pnpm start
 
-# 开发模式（文件改动自动重新运行）
-pnpm dev
+# 查看报告 + 自动交易（需人工确认每笔订单）
+pnpm trade
+
+# 全自动模式（跳过确认）
+pnpm trade:force
 ```
 
-### 示例输出
+首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 会缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+
+## 交易流程
 
 ```
-Fetching 30 1d klines for BTCUSDT…
-Date        : 2026-05-03
-Close price : 96800.00 USDT
-SMA  7      : 95200.00 USDT
-SMA 25      : 92100.00 USDT
-Signal      : 📈 Bullish (SMA7 > SMA25)
+读取分析报告 → 过滤 A 股 → 过滤买入信号 → 转换 Symbol
+    ↓
+查询实时行情 → 检查价格阈值 → 计算下单数量（尊重手数）
+    ↓
+展示交易计划 + 分析记录 → 人工确认（--force 跳过）
+    ↓
+提交买入限价单 (LO) → 提交止损单 (MIT) → 提交止盈单 (LIT)
+    ↓
+记录到 submitted_orders.json（防重复）
 ```
 
 ## 项目结构
 
 ```
-trading-scripts/
-├── src/
-│   └── index.ts   # 主脚本入口
-├── package.json
-└── tsconfig.json
+src/
+  trade.ts              # 主入口（报告展示 + 自动交易）
+  lib/
+    auth.ts             # Longbridge OAuth 认证
+    symbols.ts          # DB code → Longbridge symbol 转换
+    db.ts               # SQLite 查询
+    executor.ts         # 交易执行（查价、确认、下单 + 止损止盈）
+    tracker.ts          # 已提交订单追踪
+    types.ts            # 共享类型定义
 ```
 
-## 依赖说明
+## 环境变量
 
-| 包 | 用途 |
-|---|---|
-| `tsx` | 直接运行 TypeScript，无需编译步骤 |
-| `typescript` | 类型检查 |
-| `@types/node` | Node.js 内置模块类型定义 |
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `CLIENT_ID` | 是 | - | Longbridge OAuth client ID |
+| `DB_PATH` | 否 | `./stock_analysis.db` | SQLite 数据库路径 |
+| `PRICE_THRESHOLD_PCT` | 否 | `2` | 当前价超出目标价此百分比内仍下单 |
+| `MAX_POSITION_VALUE` | 否 | `10000` | 单个持仓最大金额（HKD 港股 / USD 美股） |
+
