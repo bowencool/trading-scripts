@@ -7,12 +7,13 @@ export function fetchBuySignals(
 ): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
+  const placeholders = excludeRecordIds.map(() => "?").join(",");
   const excludeClause =
     excludeRecordIds.length > 0
-      ? `AND id NOT IN (${excludeRecordIds.join(",")})`
+      ? `AND id NOT IN (${placeholders})`
       : "";
 
-  const reports = db.prepare(`
+  const stmt = db.prepare(`
     SELECT
       id, code, name, report_type, sentiment_score,
       operation_advice, trend_prediction, analysis_summary,
@@ -24,7 +25,10 @@ export function fetchBuySignals(
       AND code NOT GLOB '[036][0-9][0-9][0-9][0-9][0-9]'
       ${excludeClause}
     ORDER BY created_at DESC
-  `).all() as unknown as AnalysisRecord[];
+  `);
+  const reports = (excludeRecordIds.length > 0
+    ? stmt.all(...excludeRecordIds)
+    : stmt.all()) as unknown as AnalysisRecord[];
 
   db.close();
   return reports;

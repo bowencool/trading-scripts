@@ -87,6 +87,12 @@ export async function executeSignal(
     return null;
   }
 
+  // Guard against zero/negative price (e.g. stock halt)
+  if (currentPriceNum <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价: ${currentPriceNum}`);
+    return null;
+  }
+
   // Calculate quantity based on account net assets * positionPct%
   const netAssets = balances.length > 0 ? Number(balances[0].netAssets.toString()) : 0;
   if (netAssets <= 0) {
@@ -94,7 +100,9 @@ export async function executeSignal(
     return null;
   }
   const maxPositionValue = netAssets * positionPct / 100;
-  const qty = Math.floor(maxPositionValue / currentPriceNum / lotSize) * lotSize;
+  // Use the higher of current price and target price to avoid over-sizing
+  const sizingPrice = Math.max(currentPriceNum, signal.targetPrice);
+  const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
   if (qty <= 0) {
     console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`);
     return null;

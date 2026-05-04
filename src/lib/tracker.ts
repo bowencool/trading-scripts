@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import type { TrackedOrder } from "./types.js";
 
 const TRACKER_FILE = "./submitted_orders.json";
@@ -8,15 +8,19 @@ export function loadTrackedOrders(): TrackedOrder[] {
   try {
     const data = readFileSync(TRACKER_FILE, "utf-8");
     return JSON.parse(data) as TrackedOrder[];
-  } catch {
-    return [];
+  } catch (err) {
+    console.error(`Failed to read or parse ${TRACKER_FILE}:`, err);
+    throw err;
   }
 }
 
 export function trackOrder(order: TrackedOrder): void {
   const orders = loadTrackedOrders();
   orders.push(order);
-  writeFileSync(TRACKER_FILE, JSON.stringify(orders, null, 2), "utf-8");
+  // Atomic write: write to temp file first, then rename
+  const tmpFile = `${TRACKER_FILE}.tmp`;
+  writeFileSync(tmpFile, JSON.stringify(orders, null, 2), "utf-8");
+  renameSync(tmpFile, TRACKER_FILE);
 }
 
 export function getSubmittedRecordIds(): Set<number> {

@@ -46,6 +46,14 @@ async function main(): Promise<void> {
 
     const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
     const positionPct = Number(process.env.POSITION_PCT || "20");
+    if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
+      console.error(`错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`);
+      process.exit(1);
+    }
+    if (!Number.isFinite(positionPct) || positionPct <= 0 || positionPct > 100) {
+      console.error(`错误: POSITION_PCT 必须是 0-100 的正数，当前值: ${process.env.POSITION_PCT}`);
+      process.exit(1);
+    }
 
     const submittedIds = getSubmittedRecordIds();
     const records = fetchBuySignals(dbPath, [...submittedIds]);
