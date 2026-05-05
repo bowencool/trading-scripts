@@ -10,27 +10,7 @@ import {
 import type { OrderWatcher } from "./order-watcher.js";
 import { linkOcoOrders, loadTrackedOrders, removeOrder, trackOrder } from "./tracker.js";
 import type { AnalysisRecord, TradeSignal } from "./types.js";
-
-function orderStatusName(status: OrderStatus): string {
-  switch (status) {
-    case OrderStatus.Filled:
-      return "Filled";
-    case OrderStatus.Canceled:
-      return "Canceled";
-    case OrderStatus.Rejected:
-      return "Rejected";
-    case OrderStatus.Expired:
-      return "Expired";
-    case OrderStatus.New:
-      return "New";
-    case OrderStatus.PartialFilled:
-      return "PartialFilled";
-    case OrderStatus.NotReported:
-      return "NotReported";
-    default:
-      return `Status(${status})`;
-  }
-}
+import { orderStatusName } from "./utils.js";
 
 export interface ExecutorConfig {
   quoteCtx: QuoteContext;
@@ -58,26 +38,31 @@ function printAnalysisRecord(record: AnalysisRecord): void {
 }
 
 function promptConfirm(message: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    console.log(message);
+    console.log("(非交互模式，自动确认)");
+    return Promise.resolve(true);
+  }
   return new Promise((resolve) => {
     process.stdout.write(message);
-    process.stdin.setRawMode?.(true);
+    process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.setEncoding("utf8");
     const onData = (key: string) => {
-      if (key === "\r" || key === "\n") {
-        // Enter = confirm
+      if (key === "\r" || key === "\n" || key === "y" || key === "Y") {
+        // Enter / y = confirm
         cleanup();
         process.stdout.write("y\n");
         resolve(true);
-      } else if (key === "\x1B") {
-        // Esc = cancel
+      } else if (key === "\x1B" || key === "n" || key === "N" || key === "q" || key === "Q") {
+        // Esc / n / q = cancel
         cleanup();
         process.stdout.write("n\n");
         resolve(false);
       }
     };
     const cleanup = () => {
-      process.stdin.setRawMode?.(false);
+      process.stdin.setRawMode(false);
       process.stdin.pause();
       process.stdin.off("data", onData);
     };

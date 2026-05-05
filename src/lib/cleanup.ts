@@ -1,15 +1,6 @@
 import { OrderStatus, type TradeContext } from "longbridge";
 import { loadTrackedOrders, removeOrder } from "./tracker.js";
-
-/** Terminal states where the order is no longer active on the exchange. */
-function isTerminal(status: OrderStatus): boolean {
-  return (
-    status === OrderStatus.Filled ||
-    status === OrderStatus.Canceled ||
-    status === OrderStatus.Rejected ||
-    status === OrderStatus.Expired
-  );
-}
+import { isTerminal } from "./utils.js";
 
 /**
  * Check tracked buy/sell orders via API and remove any that have reached a

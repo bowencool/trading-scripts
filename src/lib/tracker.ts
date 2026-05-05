@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { TrackedOrder } from "./types.js";
 
-const TRACKER_FILE = "./data/submitted_orders.json";
+const TRACKER_FILE = resolve(__dirname, "../../data/submitted_orders.json");
 
 export function loadTrackedOrders(): TrackedOrder[] {
   if (!existsSync(TRACKER_FILE)) return [];

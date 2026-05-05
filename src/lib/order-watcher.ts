@@ -1,36 +1,6 @@
 import { OrderStatus, type PushOrderChanged, TopicType, type TradeContext } from "longbridge";
 import { removeOrder } from "./tracker.js";
-
-/** Terminal states where the order is no longer active on the exchange. */
-function isTerminal(status: OrderStatus): boolean {
-  return (
-    status === OrderStatus.Filled ||
-    status === OrderStatus.Canceled ||
-    status === OrderStatus.Rejected ||
-    status === OrderStatus.Expired
-  );
-}
-
-function _orderStatusName(status: OrderStatus): string {
-  switch (status) {
-    case OrderStatus.Filled:
-      return "Filled";
-    case OrderStatus.Canceled:
-      return "Canceled";
-    case OrderStatus.Rejected:
-      return "Rejected";
-    case OrderStatus.Expired:
-      return "Expired";
-    case OrderStatus.New:
-      return "New";
-    case OrderStatus.PartialFilled:
-      return "PartialFilled";
-    case OrderStatus.NotReported:
-      return "NotReported";
-    default:
-      return `Status(${status})`;
-  }
-}
+import { isTerminal } from "./utils.js";
 
 interface PendingOrder {
   resolve: (event: PushOrderChanged) => void;
