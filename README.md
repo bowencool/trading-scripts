@@ -9,7 +9,9 @@
 - 通过 Longbridge SDK 自动提交买入限价单
 - 等待买单成交确认后再提交止损/止盈，防止幽灵订单
 - 自动设置止损单（MIT）和止盈单（LIT）
-- 孤儿订单清理（`--cleanup`），自动取消无父订单的止损/止盈
+- 孤儿订单清理（`pnpm trade:cleanup`），自动取消无父订单的止损/止盈
+- OCO 互斥订单实时监控，一方成交自动取消另一方
+- 过期订单记录自动清理（保留最近 2 周）
 - 订单追踪，防止重复下单
 - 支持人工确认和全自动两种模式
 
@@ -88,11 +90,14 @@ pnpm trade:cleanup
 ```
 src/
   trade.ts              # 主入口（报告展示 + 自动交易）
+  cleanup.ts            # 独立清理入口（孤儿订单 + OCO + 过期记录）
   lib/
     auth.ts             # Longbridge OAuth 认证
+    cleanup.ts          # 清理逻辑（孤儿订单、OCO 互斥、过期记录）
     symbols.ts          # DB code → Longbridge symbol 转换
     db.ts               # SQLite 查询
     executor.ts         # 交易执行（查价、确认、下单 + 止损止盈）
+    order-watcher.ts    # WebSocket 订单推送监听
     tracker.ts          # 已提交订单追踪
     types.ts            # 共享类型定义
 ```

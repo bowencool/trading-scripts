@@ -37,6 +37,28 @@ export function getSubmittedRecordIds(): Set<number> {
   return new Set(orders.filter((o) => o.role === "buy").map((o) => o.signalRecordId));
 }
 
+const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks
+
+/** Remove tracking records older than 2 weeks. Returns the number of pruned records. */
+export function pruneExpiredOrders(): number {
+  const now = Date.now();
+  const orders = loadTrackedOrders();
+  const [kept, expired] = partition(orders, (o) => now - new Date(o.submittedAt).getTime() < MAX_AGE_MS);
+  if (expired.length > 0) {
+    saveOrders(kept);
+  }
+  return expired.length;
+}
+
+function partition<T>(arr: T[], predicate: (item: T) => boolean): [T[], T[]] {
+  const a: T[] = [];
+  const b: T[] = [];
+  for (const item of arr) {
+    (predicate(item) ? a : b).push(item);
+  }
+  return [a, b];
+}
+
 /** Link two orders as an OCO pair so that filling one cancels the other. */
 export function linkOcoOrders(orderId1: string, orderId2: string): void {
   const orders = loadTrackedOrders();
