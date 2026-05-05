@@ -1,4 +1,4 @@
-import { TradeContext, OrderStatus, TopicType, type PushOrderChanged } from "longbridge";
+import { OrderStatus, type PushOrderChanged, TopicType, type TradeContext } from "longbridge";
 import { removeOrder } from "./tracker.js";
 
 /** Terminal states where the order is no longer active on the exchange. */
@@ -11,16 +11,24 @@ function isTerminal(status: OrderStatus): boolean {
   );
 }
 
-function orderStatusName(status: OrderStatus): string {
+function _orderStatusName(status: OrderStatus): string {
   switch (status) {
-    case OrderStatus.Filled: return "Filled";
-    case OrderStatus.Canceled: return "Canceled";
-    case OrderStatus.Rejected: return "Rejected";
-    case OrderStatus.Expired: return "Expired";
-    case OrderStatus.New: return "New";
-    case OrderStatus.PartialFilled: return "PartialFilled";
-    case OrderStatus.NotReported: return "NotReported";
-    default: return `Status(${status})`;
+    case OrderStatus.Filled:
+      return "Filled";
+    case OrderStatus.Canceled:
+      return "Canceled";
+    case OrderStatus.Rejected:
+      return "Rejected";
+    case OrderStatus.Expired:
+      return "Expired";
+    case OrderStatus.New:
+      return "New";
+    case OrderStatus.PartialFilled:
+      return "PartialFilled";
+    case OrderStatus.NotReported:
+      return "NotReported";
+    default:
+      return `Status(${status})`;
   }
 }
 
@@ -105,7 +113,10 @@ export class OrderWatcher {
       const fallback = setTimeout(() => {
         if (this.pending.has(orderId)) {
           console.warn(`[WARN] 订单 ${orderId} 取消后未收到 WS 推送，强制结束等待`);
-          this.resolvePending(orderId, { orderId, status: OrderStatus.Canceled } as PushOrderChanged);
+          this.resolvePending(orderId, {
+            orderId,
+            status: OrderStatus.Canceled,
+          } as PushOrderChanged);
         }
       }, CANCEL_PUSH_GRACE_MS);
       this.timers.set(`fallback:${orderId}`, fallback);
@@ -121,6 +132,7 @@ export class OrderWatcher {
 
     // Check OCO pairs first
     if (status === OrderStatus.Filled && this.ocoPairs.has(orderId)) {
+      // biome-ignore lint/style/noNonNullAssertion: just checked has(orderId)
       const pairId = this.ocoPairs.get(orderId)!;
       this.handleOcoFill(orderId, pairId);
     }
@@ -141,7 +153,10 @@ export class OrderWatcher {
     // Clean up all timers for this order
     for (const key of [`timeout:${orderId}`, `fallback:${orderId}`]) {
       const t = this.timers.get(key);
-      if (t) { clearTimeout(t); this.timers.delete(key); }
+      if (t) {
+        clearTimeout(t);
+        this.timers.delete(key);
+      }
     }
   }
 

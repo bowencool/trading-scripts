@@ -1,11 +1,11 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import { cleanupOrphanedOrders, cleanupOcoOrders, pruneStaleBuyOrders } from "./lib/cleanup.js";
+import { cleanupOcoOrders, cleanupOrphanedOrders, pruneStaleBuyOrders } from "./lib/cleanup.js";
 import { fetchBuySignals, fetchRecentReports, fetchSellSignals } from "./lib/db.js";
-import { executeSignal, executeSellSignal } from "./lib/executor.js";
+import { executeSellSignal, executeSignal } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
-import { getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
+import { getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
 import type { TradeSignal } from "./lib/types.js";
 
 async function main(): Promise<void> {
@@ -26,7 +26,9 @@ async function main(): Promise<void> {
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
   const positionPct = Number(process.env.POSITION_PCT || "20");
   if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
-    console.error(`错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`);
+    console.error(
+      `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
+    );
     process.exit(1);
   }
   if (!Number.isFinite(positionPct) || positionPct <= 0 || positionPct > 100) {
@@ -57,6 +59,7 @@ async function main(): Promise<void> {
       record,
       symbol,
       side: "Buy",
+      // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
       targetPrice: record.ideal_buy!,
       stopLoss: record.stop_loss,
       takeProfit: record.take_profit,
@@ -83,7 +86,9 @@ async function main(): Promise<void> {
     });
   }
 
-  console.log(`\n找到 ${signals.length} 个信号待处理（${signals.filter(s => s.side === "Buy").length} 买入 / ${signals.filter(s => s.side === "Sell").length} 卖出）\n`);
+  console.log(
+    `\n找到 ${signals.length} 个信号待处理（${signals.filter((s) => s.side === "Buy").length} 买入 / ${signals.filter((s) => s.side === "Sell").length} 卖出）\n`,
+  );
 
   if (signals.length === 0) {
     console.log("没有符合条件的交易信号。");
@@ -112,7 +117,14 @@ async function main(): Promise<void> {
     }
   }
 
-  const execConfig = { quoteCtx, tradeCtx, orderWatcher, force: isForce, positionPct, priceThresholdPct };
+  const execConfig = {
+    quoteCtx,
+    tradeCtx,
+    orderWatcher,
+    force: isForce,
+    positionPct,
+    priceThresholdPct,
+  };
   for (const signal of signals) {
     if (signal.side === "Buy") {
       await executeSignal(execConfig, signal);

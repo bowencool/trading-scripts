@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { TrackedOrder } from "./types.js";
 
 const TRACKER_FILE = "./data/submitted_orders.json";
@@ -34,7 +34,9 @@ function saveOrders(orders: TrackedOrder[]): void {
 
 export function getSubmittedRecordIds(): Set<number> {
   const orders = loadTrackedOrders();
-  return new Set(orders.filter((o) => o.role === "buy" || o.role === "sell").map((o) => o.signalRecordId));
+  return new Set(
+    orders.filter((o) => o.role === "buy" || o.role === "sell").map((o) => o.signalRecordId),
+  );
 }
 
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks
@@ -43,7 +45,10 @@ const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks
 export function pruneExpiredOrders(): number {
   const now = Date.now();
   const orders = loadTrackedOrders();
-  const [kept, expired] = partition(orders, (o) => now - new Date(o.submittedAt).getTime() < MAX_AGE_MS);
+  const [kept, expired] = partition(
+    orders,
+    (o) => now - new Date(o.submittedAt).getTime() < MAX_AGE_MS,
+  );
   if (expired.length > 0) {
     saveOrders(kept);
   }

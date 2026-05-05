@@ -1,6 +1,6 @@
 import { TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import { cleanupOrphanedOrders, cleanupOcoOrders, pruneExpiredOrders } from "./lib/cleanup.js";
+import { cleanupOcoOrders, cleanupOrphanedOrders, pruneExpiredOrders } from "./lib/cleanup.js";
 
 async function main(): Promise<void> {
   const clientId = process.env.CLIENT_ID;

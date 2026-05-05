@@ -1,18 +1,34 @@
-import { QuoteContext, TradeContext, Decimal, OrderType, OrderSide, TimeInForceType, OrderStatus } from "longbridge";
-import type { TradeSignal, AnalysisRecord } from "./types.js";
-import { loadTrackedOrders, trackOrder, removeOrder } from "./tracker.js";
+import {
+  Decimal,
+  OrderSide,
+  OrderStatus,
+  OrderType,
+  type QuoteContext,
+  TimeInForceType,
+  type TradeContext,
+} from "longbridge";
 import type { OrderWatcher } from "./order-watcher.js";
+import { loadTrackedOrders, removeOrder, trackOrder } from "./tracker.js";
+import type { AnalysisRecord, TradeSignal } from "./types.js";
 
 function orderStatusName(status: OrderStatus): string {
   switch (status) {
-    case OrderStatus.Filled: return "Filled";
-    case OrderStatus.Canceled: return "Canceled";
-    case OrderStatus.Rejected: return "Rejected";
-    case OrderStatus.Expired: return "Expired";
-    case OrderStatus.New: return "New";
-    case OrderStatus.PartialFilled: return "PartialFilled";
-    case OrderStatus.NotReported: return "NotReported";
-    default: return `Status(${status})`;
+    case OrderStatus.Filled:
+      return "Filled";
+    case OrderStatus.Canceled:
+      return "Canceled";
+    case OrderStatus.Rejected:
+      return "Rejected";
+    case OrderStatus.Expired:
+      return "Expired";
+    case OrderStatus.New:
+      return "New";
+    case OrderStatus.PartialFilled:
+      return "PartialFilled";
+    case OrderStatus.NotReported:
+      return "NotReported";
+    default:
+      return `Status(${status})`;
   }
 }
 
@@ -26,14 +42,14 @@ export interface ExecutorConfig {
 }
 
 function printAnalysisRecord(record: AnalysisRecord): void {
-  console.log("\n" + "=".repeat(80));
+  console.log(`\n${"=".repeat(80)}`);
   console.log(`🔹 [${record.code}] ${record.name ?? "未知"}`);
   console.log(`   报告类型: ${record.report_type ?? "-"} | 时间: ${record.created_at}`);
   console.log(
-    `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`
+    `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`,
   );
   console.log(
-    `   理想买入: ${record.ideal_buy ?? "-"} | 次选买入: ${record.secondary_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`
+    `   理想买入: ${record.ideal_buy ?? "-"} | 次选买入: ${record.secondary_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
   );
   if (record.analysis_summary) {
     console.log(`   摘要: ${record.analysis_summary}`);
@@ -79,7 +95,7 @@ function getCurrency(symbol: string): string {
 
 export async function executeSignal(
   execConfig: ExecutorConfig,
-  signal: TradeSignal
+  signal: TradeSignal,
 ): Promise<{ buyOrderId: string; stopLossOrderId?: string; takeProfitOrderId?: string } | null> {
   const { quoteCtx, tradeCtx, orderWatcher, force, positionPct, priceThresholdPct } = execConfig;
 
@@ -107,7 +123,7 @@ export async function executeSignal(
   const threshold = signal.targetPrice * (1 + priceThresholdPct / 100);
   if (currentPriceNum > threshold) {
     console.log(
-      `[SKIP] ${signal.symbol} - 当前价 ${currentPriceNum} 超出目标价 ${signal.targetPrice} 的 ${priceThresholdPct}% 阈值 (${threshold.toFixed(2)})`
+      `[SKIP] ${signal.symbol} - 当前价 ${currentPriceNum} 超出目标价 ${signal.targetPrice} 的 ${priceThresholdPct}% 阈值 (${threshold.toFixed(2)})`,
     );
     return null;
   }
@@ -124,20 +140,28 @@ export async function executeSignal(
     console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产（货币: ${currency}）`);
     return null;
   }
-  const maxPositionValue = netAssets * positionPct / 100;
+  const maxPositionValue = (netAssets * positionPct) / 100;
   // Use the higher of current price and target price to avoid over-sizing
   const sizingPrice = Math.max(currentPriceNum, signal.targetPrice);
   const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
   if (qty <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`);
+    console.log(
+      `[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
+    );
     return null;
   }
 
   // Print trade plan
   console.log(`\n📋 交易计划:`);
-  console.log(`   标的: ${signal.symbol} | 当前价: ${currentPriceNum} | 目标价: ${signal.targetPrice}`);
-  console.log(`   账户净资产: ${netAssets.toFixed(0)} ${currency} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`);
-  console.log(`   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`);
+  console.log(
+    `   标的: ${signal.symbol} | 当前价: ${currentPriceNum} | 目标价: ${signal.targetPrice}`,
+  );
+  console.log(
+    `   账户净资产: ${netAssets.toFixed(0)} ${currency} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
+  );
+  console.log(
+    `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
+  );
   if (signal.stopLoss) {
     console.log(`   止损: ${signal.stopLoss} (MIT 市价触单)`);
   }
@@ -190,7 +214,9 @@ export async function executeSignal(
 
   if (buyEvent.status !== OrderStatus.Filled) {
     // 10s limit order not filled → re-fetch price, decide retry or skip
-    console.log(`[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)})，重新评估...`);
+    console.log(
+      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)})，重新评估...`,
+    );
 
     removeOrder(buyOrderId);
 
@@ -208,12 +234,16 @@ export async function executeSignal(
     }
 
     if (retryPrice > retryThreshold) {
-      console.log(`[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`);
+      console.log(
+        `[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`,
+      );
       return null;
     }
 
     // Within threshold → submit market order
-    console.log(`[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换市价单买入...`);
+    console.log(
+      `[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换市价单买入...`,
+    );
     const moResp = await tradeCtx.submitOrder({
       symbol: signal.symbol,
       orderType: OrderType.MO,
@@ -240,7 +270,9 @@ export async function executeSignal(
 
     const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
     if (moEvent.status !== OrderStatus.Filled) {
-      console.log(`[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`);
+      console.log(
+        `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
+      );
       removeOrder(filledOrderId);
       return null;
     }
@@ -330,7 +362,7 @@ export async function executeSignal(
 
 export async function executeSellSignal(
   execConfig: ExecutorConfig,
-  signal: TradeSignal
+  signal: TradeSignal,
 ): Promise<{ sellOrderId: string } | null> {
   const { tradeCtx, force, positionPct } = execConfig;
   const isPartial = signal.sellMode === "reduce";
@@ -352,7 +384,9 @@ export async function executeSellSignal(
   const availableQty = Number(pos.availableQuantity.toString());
 
   if (availableQty <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 可卖数量为 0（总持仓 ${totalQty}，可用 ${availableQty}）`);
+    console.log(
+      `[SKIP] ${signal.symbol} - 可卖数量为 0（总持仓 ${totalQty}，可用 ${availableQty}）`,
+    );
     return null;
   }
 
@@ -361,7 +395,7 @@ export async function executeSellSignal(
   let sellQty: number;
   if (isPartial) {
     // Reduce: sell positionPct% of available
-    const reduceQty = Math.floor(availableQty * positionPct / 100 / lotSize) * lotSize;
+    const reduceQty = Math.floor((availableQty * positionPct) / 100 / lotSize) * lotSize;
     sellQty = reduceQty;
     console.log(`📉 减仓模式: 可卖 ${availableQty} 股, 减持 ${positionPct}% = ${sellQty} 股`);
   } else {
@@ -378,7 +412,7 @@ export async function executeSellSignal(
   // 3. Cancel existing SL/TP orders for this symbol
   const trackedOrders = loadTrackedOrders();
   const slTpOrders = trackedOrders.filter(
-    (o) => o.symbol === signal.symbol && (o.role === "stop_loss" || o.role === "take_profit")
+    (o) => o.symbol === signal.symbol && (o.role === "stop_loss" || o.role === "take_profit"),
   );
 
   for (const slTp of slTpOrders) {
@@ -414,7 +448,9 @@ export async function executeSellSignal(
   }
 
   // 7. Submit sell order
-  const remark = isPartial ? `auto-trade:reduce:${signal.record.id}` : `auto-trade:sell:${signal.record.id}`;
+  const remark = isPartial
+    ? `auto-trade:reduce:${signal.record.id}`
+    : `auto-trade:sell:${signal.record.id}`;
   const resp = await tradeCtx.submitOrder({
     symbol: signal.symbol,
     orderType: signal.targetPrice > 0 ? OrderType.LO : OrderType.MO,
@@ -426,7 +462,9 @@ export async function executeSellSignal(
   });
 
   const sellOrderId = resp.orderId;
-  console.log(`[OK] 卖出单已提交: ${sellOrderId} (${isPartial ? "减仓" : "清仓"} ${sellQty} 股 @ ${sellPrice})`);
+  console.log(
+    `[OK] 卖出单已提交: ${sellOrderId} (${isPartial ? "减仓" : "清仓"} ${sellQty} 股 @ ${sellPrice})`,
+  );
 
   // 8. Track sell order
   trackOrder({

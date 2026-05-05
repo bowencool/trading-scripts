@@ -1,17 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import type { AnalysisRecord } from "./types.js";
 
-export function fetchBuySignals(
-  dbPath: string,
-  excludeRecordIds: number[]
-): AnalysisRecord[] {
+export function fetchBuySignals(dbPath: string, excludeRecordIds: number[]): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
   const placeholders = excludeRecordIds.map(() => "?").join(",");
-  const excludeClause =
-    excludeRecordIds.length > 0
-      ? `AND id NOT IN (${placeholders})`
-      : "";
+  const excludeClause = excludeRecordIds.length > 0 ? `AND id NOT IN (${placeholders})` : "";
 
   const stmt = db.prepare(`
     WITH ranked AS (
@@ -41,17 +35,11 @@ export function fetchBuySignals(
   return reports;
 }
 
-export function fetchSellSignals(
-  dbPath: string,
-  excludeRecordIds: number[]
-): AnalysisRecord[] {
+export function fetchSellSignals(dbPath: string, excludeRecordIds: number[]): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
   const placeholders = excludeRecordIds.map(() => "?").join(",");
-  const excludeClause =
-    excludeRecordIds.length > 0
-      ? `AND id NOT IN (${placeholders})`
-      : "";
+  const excludeClause = excludeRecordIds.length > 0 ? `AND id NOT IN (${placeholders})` : "";
 
   const stmt = db.prepare(`
     WITH ranked AS (
@@ -84,7 +72,8 @@ export function fetchSellSignals(
 export function fetchRecentReports(dbPath: string): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
-  const reports = db.prepare(`
+  const reports = db
+    .prepare(`
     WITH ranked AS (
       SELECT
         id, code, name, report_type, sentiment_score,
@@ -100,7 +89,8 @@ export function fetchRecentReports(dbPath: string): AnalysisRecord[] {
            ideal_buy, secondary_buy, stop_loss, take_profit, created_at
     FROM ranked WHERE rn = 1
     ORDER BY created_at DESC
-  `).all() as unknown as AnalysisRecord[];
+  `)
+    .all() as unknown as AnalysisRecord[];
 
   db.close();
   return reports;

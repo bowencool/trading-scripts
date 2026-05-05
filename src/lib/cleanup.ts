@@ -1,5 +1,5 @@
-import { TradeContext, OrderStatus } from "longbridge";
-import { loadTrackedOrders, pruneExpiredOrders, removeOrder } from "./tracker.js";
+import { OrderStatus, type TradeContext } from "longbridge";
+import { loadTrackedOrders, removeOrder } from "./tracker.js";
 
 /** Terminal states where the order is no longer active on the exchange. */
 function isTerminal(status: OrderStatus): boolean {
@@ -26,8 +26,17 @@ export async function pruneStaleBuyOrders(tradeCtx: TradeContext): Promise<void>
     try {
       const detail = await tradeCtx.orderDetail(order.orderId);
       if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
-        const statusName = detail.status === OrderStatus.Canceled ? "已撤单" : detail.status === OrderStatus.Expired ? "已过期" : detail.status === OrderStatus.Rejected ? "被拒绝" : `状态${detail.status}`;
-        console.log(`[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`);
+        const statusName =
+          detail.status === OrderStatus.Canceled
+            ? "已撤单"
+            : detail.status === OrderStatus.Expired
+              ? "已过期"
+              : detail.status === OrderStatus.Rejected
+                ? "被拒绝"
+                : `状态${detail.status}`;
+        console.log(
+          `[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`,
+        );
         removeOrder(order.orderId);
         pruned++;
       }
@@ -64,10 +73,21 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     }
     try {
       const buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId);
-      if (buyDetail.status === OrderStatus.Canceled || buyDetail.status === OrderStatus.Expired || buyDetail.status === OrderStatus.Rejected) {
+      if (
+        buyDetail.status === OrderStatus.Canceled ||
+        buyDetail.status === OrderStatus.Expired ||
+        buyDetail.status === OrderStatus.Rejected
+      ) {
         await tradeCtx.cancelOrder(slTp.orderId);
-        const statusName = buyDetail.status === OrderStatus.Canceled ? "Canceled" : buyDetail.status === OrderStatus.Expired ? "Expired" : "Rejected";
-        console.log(`[CANCEL] 买单 ${slTp.linkedBuyOrderId} 已${statusName}，取消关联订单 ${slTp.orderId} (${slTp.role})`);
+        const statusName =
+          buyDetail.status === OrderStatus.Canceled
+            ? "Canceled"
+            : buyDetail.status === OrderStatus.Expired
+              ? "Expired"
+              : "Rejected";
+        console.log(
+          `[CANCEL] 买单 ${slTp.linkedBuyOrderId} 已${statusName}，取消关联订单 ${slTp.orderId} (${slTp.role})`,
+        );
         removeOrder(slTp.orderId);
         cleaned++;
       }
@@ -91,7 +111,7 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
   console.log("🔗 检查 OCO 互斥订单...");
   const orders = loadTrackedOrders();
   const ocoOrders = orders.filter(
-    (o) => (o.role === "stop_loss" || o.role === "take_profit") && o.ocoPairOrderId
+    (o) => (o.role === "stop_loss" || o.role === "take_profit") && o.ocoPairOrderId,
   );
 
   if (ocoOrders.length === 0) {
@@ -104,6 +124,7 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
   let ocoCleaned = 0;
 
   for (const order of ocoOrders) {
+    // biome-ignore lint/style/noNonNullAssertion: OCO orders always have pairOrderId
     const pairId = order.ocoPairOrderId!;
     const pairKey = [order.orderId, pairId].sort().join(":");
     if (processed.has(pairKey)) continue;
@@ -119,7 +140,7 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
       if (isTerminal(detail.status) && isTerminal(pairDetail.status)) {
         if (detail.status === OrderStatus.Filled || pairDetail.status === OrderStatus.Filled) {
           console.log(
-            `[OCO] 订单 ${order.orderId} (${order.role}) 与 ${pairId} 均已结束，清理跟踪记录`
+            `[OCO] 订单 ${order.orderId} (${order.role}) 与 ${pairId} 均已结束，清理跟踪记录`,
           );
           removeOrder(order.orderId);
           removeOrder(pairId);
@@ -133,7 +154,7 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
         try {
           await tradeCtx.cancelOrder(pairId);
           console.log(
-            `[OCO] ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId} 已成交，取消对端 ${pairId}`
+            `[OCO] ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId} 已成交，取消对端 ${pairId}`,
           );
           removeOrder(order.orderId);
           removeOrder(pairId);
@@ -149,7 +170,7 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
         try {
           await tradeCtx.cancelOrder(order.orderId);
           console.log(
-            `[OCO] 对端 ${pairId} 已成交，取消 ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId}`
+            `[OCO] 对端 ${pairId} 已成交，取消 ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId}`,
           );
           removeOrder(order.orderId);
           removeOrder(pairId);

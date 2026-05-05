@@ -1,4 +1,4 @@
-import { OAuth, Config } from "longbridge";
+import { Config, OAuth } from "longbridge";
 
 export async function buildConfig(clientId: string): Promise<Config> {
   const oauth = await OAuth.build(clientId, (err, url) => {
