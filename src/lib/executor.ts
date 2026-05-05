@@ -16,7 +16,7 @@ export interface ExecutorConfig {
   quoteCtx: QuoteContext;
   tradeCtx: TradeContext;
   orderWatcher: OrderWatcher;
-  force: boolean;
+  autoApprove: boolean;
   positionPct: number;
   priceThresholdPct: number;
 }
@@ -82,7 +82,8 @@ export async function executeSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
 ): Promise<{ buyOrderId: string; stopLossOrderId?: string; takeProfitOrderId?: string } | null> {
-  const { quoteCtx, tradeCtx, orderWatcher, force, positionPct, priceThresholdPct } = execConfig;
+  const { quoteCtx, tradeCtx, orderWatcher, autoApprove, positionPct, priceThresholdPct } =
+    execConfig;
 
   // Display analysis record
   printAnalysisRecord(signal.record);
@@ -156,7 +157,7 @@ export async function executeSignal(
   console.log(`   ⏳ 限价单等待: 10 秒（超时后自动评估是否切换市价单）`);
 
   // Confirmation
-  if (!force) {
+  if (!autoApprove) {
     const confirmed = await promptConfirm("\n确认下单？(Enter 确认 / Esc 取消): ");
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
@@ -357,7 +358,7 @@ export async function executeSellSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
 ): Promise<{ sellOrderId: string } | null> {
-  const { tradeCtx, force, positionPct } = execConfig;
+  const { tradeCtx, autoApprove, positionPct } = execConfig;
   const isPartial = signal.sellMode === "reduce";
 
   // Display analysis record
@@ -432,7 +433,7 @@ export async function executeSellSignal(
   console.log(`   模式: ${isPartial ? "减仓" : "清仓"}`);
 
   // 6. Confirmation
-  if (!force) {
+  if (!autoApprove) {
     const confirmed = await promptConfirm("\n确认卖出？(Enter 确认 / Esc 取消): ");
     if (!confirmed) {
       console.log("[SKIP] 用户取消");

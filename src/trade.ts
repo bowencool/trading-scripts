@@ -15,7 +15,7 @@ import type { TradeSignal } from "./lib/types.js";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const isForce = args.includes("--force");
+  const isAutoApprove = args.includes("--auto-approve");
 
   const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
 
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     quoteCtx,
     tradeCtx,
     orderWatcher,
-    force: isForce,
+    autoApprove: isAutoApprove,
     positionPct,
     priceThresholdPct,
   };

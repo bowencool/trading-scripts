@@ -6,7 +6,7 @@
   "scripts": {
     "reports": "tsx --env-file=.env src/reports.ts",
     "trade": "tsx --env-file=.env src/trade.ts",
-    "trade:force": "tsx --env-file=.env src/trade.ts --force",
+    "trade:auto": "tsx --env-file=.env src/trade.ts --auto-approve",
 
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
