@@ -21,6 +21,7 @@ export interface TradeSignal {
   targetPrice: number;
   stopLoss: number | null;
   takeProfit: number | null;
+  sellMode?: "full" | "reduce";
 }
 
 export interface TrackedOrder {
@@ -33,7 +34,7 @@ export interface TrackedOrder {
   quantity: string;
   submittedAt: string;
   signalRecordId: number;
-  role: "buy" | "stop_loss" | "take_profit";
+  role: "buy" | "sell" | "stop_loss" | "take_profit";
   linkedBuyOrderId?: string;
   /** When set, this order and the one at ocoPairOrderId form an OCO pair — filling one cancels the other. */
   ocoPairOrderId?: string;

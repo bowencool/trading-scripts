@@ -20,8 +20,41 @@ export function fetchBuySignals(
       ideal_buy, secondary_buy, stop_loss, take_profit, created_at
     FROM analysis_history
     WHERE created_at >= datetime('now', '-12 hours')
-      AND operation_advice LIKE '%买入%'
+      AND (operation_advice LIKE '%买入%' OR operation_advice LIKE '%加仓%')
       AND ideal_buy IS NOT NULL
+      AND code NOT GLOB '[036][0-9][0-9][0-9][0-9][0-9]'
+      ${excludeClause}
+    ORDER BY created_at DESC
+  `);
+  const reports = (excludeRecordIds.length > 0
+    ? stmt.all(...excludeRecordIds)
+    : stmt.all()) as unknown as AnalysisRecord[];
+
+  db.close();
+  return reports;
+}
+
+export function fetchSellSignals(
+  dbPath: string,
+  excludeRecordIds: number[]
+): AnalysisRecord[] {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+
+  const placeholders = excludeRecordIds.map(() => "?").join(",");
+  const excludeClause =
+    excludeRecordIds.length > 0
+      ? `AND id NOT IN (${placeholders})`
+      : "";
+
+  const stmt = db.prepare(`
+    SELECT
+      id, code, name, report_type, sentiment_score,
+      operation_advice, trend_prediction, analysis_summary,
+      ideal_buy, secondary_buy, stop_loss, take_profit, created_at
+    FROM analysis_history
+    WHERE created_at >= datetime('now', '-12 hours')
+      AND (operation_advice LIKE '%卖出%' OR operation_advice LIKE '%减仓%')
+      AND take_profit IS NOT NULL
       AND code NOT GLOB '[036][0-9][0-9][0-9][0-9][0-9]'
       ${excludeClause}
     ORDER BY created_at DESC

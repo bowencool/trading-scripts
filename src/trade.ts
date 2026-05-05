@@ -1,8 +1,8 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
 import { cleanupOrphanedOrders, cleanupOcoOrders } from "./lib/cleanup.js";
-import { fetchBuySignals, fetchRecentReports } from "./lib/db.js";
-import { executeSignal } from "./lib/executor.js";
+import { fetchBuySignals, fetchRecentReports, fetchSellSignals } from "./lib/db.js";
+import { executeSignal, executeSellSignal } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
@@ -77,7 +77,27 @@ async function main(): Promise<void> {
       });
     }
 
-    console.log(`\n找到 ${signals.length} 个买入信号待处理\n`);
+    // Sell signals: "卖出" = full exit, "减仓" = partial exit
+    const sellRecords = fetchSellSignals(dbPath, [...submittedIds]);
+    for (const record of sellRecords) {
+      const symbol = toLongbridgeSymbol(record.code);
+      if (!symbol) {
+        console.warn(`[SKIP] 无法映射代码 "${record.code}" 到 Longbridge symbol`);
+        continue;
+      }
+      const isPartial = (record.operation_advice ?? "").includes("减仓");
+      signals.push({
+        record,
+        symbol,
+        side: "Sell",
+        targetPrice: record.take_profit ?? 0,
+        stopLoss: null,
+        takeProfit: null,
+        sellMode: isPartial ? "reduce" : "full",
+      });
+    }
+
+    console.log(`\n找到 ${signals.length} 个信号待处理（${signals.filter(s => s.side === "Buy").length} 买入 / ${signals.filter(s => s.side === "Sell").length} 卖出）\n`);
 
     if (signals.length === 0) {
       console.log("没有符合条件的交易信号。");
@@ -113,7 +133,11 @@ async function main(): Promise<void> {
 
     const execConfig = { quoteCtx, tradeCtx, orderWatcher, force: isForce, positionPct, priceThresholdPct };
     for (const signal of signals) {
-      await executeSignal(execConfig, signal);
+      if (signal.side === "Buy") {
+        await executeSignal(execConfig, signal);
+      } else {
+        await executeSellSignal(execConfig, signal);
+      }
     }
 
     // Keep the process alive briefly to allow any final OCO pushes to be processed

@@ -34,7 +34,7 @@ function saveOrders(orders: TrackedOrder[]): void {
 
 export function getSubmittedRecordIds(): Set<number> {
   const orders = loadTrackedOrders();
-  return new Set(orders.filter((o) => o.role === "buy").map((o) => o.signalRecordId));
+  return new Set(orders.filter((o) => o.role === "buy" || o.role === "sell").map((o) => o.signalRecordId));
 }
 
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 2 weeks

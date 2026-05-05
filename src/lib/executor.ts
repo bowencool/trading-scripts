@@ -1,15 +1,7 @@
-import {
-  QuoteContext,
-  TradeContext,
-  Decimal,
-  OrderType,
-  OrderSide,
-  TimeInForceType,
-  OrderStatus,
-} from "longbridge";
+import { QuoteContext, TradeContext, Decimal, OrderType, OrderSide, TimeInForceType, OrderStatus } from "longbridge";
 import { createInterface } from "node:readline";
 import type { TradeSignal, AnalysisRecord } from "./types.js";
-import { trackOrder } from "./tracker.js";
+import { loadTrackedOrders, trackOrder, removeOrder } from "./tracker.js";
 import type { OrderWatcher } from "./order-watcher.js";
 
 function orderStatusName(status: OrderStatus): string {
@@ -259,4 +251,120 @@ export async function executeSignal(
   }
 
   return { buyOrderId, stopLossOrderId, takeProfitOrderId };
+}
+
+export async function executeSellSignal(
+  execConfig: ExecutorConfig,
+  signal: TradeSignal
+): Promise<{ sellOrderId: string } | null> {
+  const { tradeCtx, force, positionPct } = execConfig;
+  const isPartial = signal.sellMode === "reduce";
+
+  // Display analysis record
+  printAnalysisRecord(signal.record);
+
+  // 1. Get current position for this symbol
+  const positionsResp = await tradeCtx.stockPositions();
+  const allPositions = positionsResp.channels.flatMap((ch) => ch.positions);
+  const pos = allPositions.find((p) => p.symbol === signal.symbol);
+
+  if (!pos) {
+    console.log(`[SKIP] ${signal.symbol} - 无持仓`);
+    return null;
+  }
+
+  const totalQty = Number(pos.quantity.toString());
+  const availableQty = Number(pos.availableQuantity.toString());
+
+  if (availableQty <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 可卖数量为 0（总持仓 ${totalQty}，可用 ${availableQty}）`);
+    return null;
+  }
+
+  // 2. Calculate sell quantity
+  const lotSize = 1; // positions already in shares, not lots
+  let sellQty: number;
+  if (isPartial) {
+    // Reduce: sell positionPct% of available
+    const reduceQty = Math.floor(availableQty * positionPct / 100 / lotSize) * lotSize;
+    sellQty = reduceQty;
+    console.log(`📉 减仓模式: 可卖 ${availableQty} 股, 减持 ${positionPct}% = ${sellQty} 股`);
+  } else {
+    // Full exit: sell all available
+    sellQty = availableQty;
+    console.log(`📉 清仓模式: 可卖 ${availableQty} 股`);
+  }
+
+  if (sellQty <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 计算卖出数量为 0`);
+    return null;
+  }
+
+  // 3. Cancel existing SL/TP orders for this symbol
+  const trackedOrders = loadTrackedOrders();
+  const slTpOrders = trackedOrders.filter(
+    (o) => o.symbol === signal.symbol && (o.role === "stop_loss" || o.role === "take_profit")
+  );
+
+  for (const slTp of slTpOrders) {
+    try {
+      await tradeCtx.cancelOrder(slTp.orderId);
+      console.log(`[CANCEL] 已取消 ${slTp.role} 订单 ${slTp.orderId}`);
+      removeOrder(slTp.orderId);
+    } catch (err) {
+      console.error(`[WARN] 取消 ${slTp.role} 订单 ${slTp.orderId} 失败: ${err}`);
+    }
+  }
+
+  // 4. Get current price for reference
+  const quotes = await execConfig.quoteCtx.quote([signal.symbol]);
+  const currentPrice = quotes.length > 0 ? Number(quotes[0].lastDone.toString()) : 0;
+  const costPrice = Number(pos.costPrice.toString());
+
+  // 5. Print trade plan
+  const sellPrice = signal.targetPrice > 0 ? signal.targetPrice : currentPrice;
+  const orderType = signal.targetPrice > 0 ? "限价单 (LO)" : "市价单 (MO)";
+  console.log(`\n📋 卖出计划:`);
+  console.log(`   标的: ${signal.symbol} | 当前价: ${currentPrice} | 成本价: ${costPrice}`);
+  console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
+  console.log(`   模式: ${isPartial ? "减仓" : "清仓"}`);
+
+  // 6. Confirmation
+  if (!force) {
+    const confirmed = await promptConfirm("\n确认卖出？(y/n): ");
+    if (!confirmed) {
+      console.log("[SKIP] 用户取消");
+      return null;
+    }
+  }
+
+  // 7. Submit sell order
+  const remark = isPartial ? `auto-trade:reduce:${signal.record.id}` : `auto-trade:sell:${signal.record.id}`;
+  const resp = await tradeCtx.submitOrder({
+    symbol: signal.symbol,
+    orderType: signal.targetPrice > 0 ? OrderType.LO : OrderType.MO,
+    side: OrderSide.Sell,
+    timeInForce: TimeInForceType.Day,
+    submittedQuantity: new Decimal(String(sellQty)),
+    ...(signal.targetPrice > 0 && { submittedPrice: new Decimal(String(sellPrice)) }),
+    remark,
+  });
+
+  const sellOrderId = resp.orderId;
+  console.log(`[OK] 卖出单已提交: ${sellOrderId} (${isPartial ? "减仓" : "清仓"} ${sellQty} 股 @ ${sellPrice})`);
+
+  // 8. Track sell order
+  trackOrder({
+    orderId: sellOrderId,
+    symbol: signal.symbol,
+    side: "Sell",
+    orderType: signal.targetPrice > 0 ? "LO" : "MO",
+    price: String(sellPrice),
+    quantity: String(sellQty),
+    submittedAt: new Date().toISOString(),
+    signalRecordId: signal.record.id,
+    role: "sell",
+  });
+
+  return { sellOrderId };
 }
