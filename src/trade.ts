@@ -1,6 +1,6 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import { cleanupOrphanedOrders, cleanupOcoOrders } from "./lib/cleanup.js";
+import { cleanupOrphanedOrders, cleanupOcoOrders, pruneStaleBuyOrders } from "./lib/cleanup.js";
 import { fetchBuySignals, fetchRecentReports, fetchSellSignals } from "./lib/db.js";
 import { executeSignal, executeSellSignal } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
@@ -57,6 +57,15 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
+    console.log("🔐 正在连接 Longbridge...");
+    const config = await buildConfig(clientId);
+    const quoteCtx = QuoteContext.new(config);
+    const tradeCtx = TradeContext.new(config);
+
+    // Check tracked orders via API, remove cancelled/expired/rejected ones
+    // so their signals can be re-processed
+    await pruneStaleBuyOrders(tradeCtx);
+
     const submittedIds = getSubmittedRecordIds();
     const records = fetchBuySignals(dbPath, [...submittedIds]);
 
@@ -103,11 +112,6 @@ async function main(): Promise<void> {
       console.log("没有符合条件的交易信号。");
       return;
     }
-
-    console.log("🔐 正在连接 Longbridge...");
-    const config = await buildConfig(clientId);
-    const quoteCtx = QuoteContext.new(config);
-    const tradeCtx = TradeContext.new(config);
 
     // Start WebSocket order push listener
     const orderWatcher = new OrderWatcher(tradeCtx);

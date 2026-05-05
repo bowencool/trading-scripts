@@ -11,6 +11,38 @@ function isTerminal(status: OrderStatus): boolean {
   );
 }
 
+/**
+ * Check tracked buy/sell orders via API and remove any that have reached a
+ * terminal state without being Filled. This frees their signalRecordIds so
+ * the signals can be re-processed on the next run.
+ */
+export async function pruneStaleBuyOrders(tradeCtx: TradeContext): Promise<void> {
+  console.log("🔍 检查已追踪订单状态...");
+  const orders = loadTrackedOrders();
+  const buySellOrders = orders.filter((o) => o.role === "buy" || o.role === "sell");
+
+  let pruned = 0;
+  for (const order of buySellOrders) {
+    try {
+      const detail = await tradeCtx.orderDetail(order.orderId);
+      if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
+        const statusName = detail.status === OrderStatus.Canceled ? "已撤单" : detail.status === OrderStatus.Expired ? "已过期" : detail.status === OrderStatus.Rejected ? "被拒绝" : `状态${detail.status}`;
+        console.log(`[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`);
+        removeOrder(order.orderId);
+        pruned++;
+      }
+    } catch (err) {
+      console.warn(`[WARN] 查询订单 ${order.orderId} 状态失败: ${err}`);
+    }
+  }
+
+  if (pruned > 0) {
+    console.log(`✅ 已清理 ${pruned} 条过期订单记录`);
+  } else {
+    console.log("✅ 已追踪订单均有效");
+  }
+}
+
 export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
   console.log("🧹 清理孤儿订单...");
   const orders = loadTrackedOrders();
