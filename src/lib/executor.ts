@@ -8,7 +8,7 @@ import {
   type TradeContext,
 } from "longbridge";
 import type { OrderWatcher } from "./order-watcher.js";
-import { loadTrackedOrders, removeOrder, trackOrder } from "./tracker.js";
+import { linkOcoOrders, loadTrackedOrders, removeOrder, trackOrder } from "./tracker.js";
 import type { AnalysisRecord, TradeSignal } from "./types.js";
 
 function orderStatusName(status: OrderStatus): string {
@@ -214,69 +214,76 @@ export async function executeSignal(
 
   if (buyEvent.status !== OrderStatus.Filled) {
     // 10s limit order not filled → re-fetch price, decide retry or skip
+    const partialFilledQty = Number((buyEvent.executedQuantity ?? new Decimal("0")).toString());
+    const remainingQty = qty - partialFilledQty;
+
     console.log(
-      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)})，重新评估...`,
+      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)}${partialFilledQty > 0 ? `, 已部分成交 ${partialFilledQty} 股` : ""})，重新评估...`,
     );
 
-    removeOrder(buyOrderId);
+    if (remainingQty <= 0) {
+      console.log(`[OK] 限价单 ${buyOrderId} 实际已全部成交`);
+    } else {
+      removeOrder(buyOrderId);
 
-    const retryQuotes = await quoteCtx.quote([signal.symbol]);
-    if (retryQuotes.length === 0) {
-      console.log(`[SKIP] ${signal.symbol} - 无法获取最新行情，跳过`);
-      return null;
-    }
-    const retryPrice = Number(retryQuotes[0].lastDone.toString());
-    const retryThreshold = signal.targetPrice * (1 + priceThresholdPct / 100);
+      const retryQuotes = await quoteCtx.quote([signal.symbol]);
+      if (retryQuotes.length === 0) {
+        console.log(`[SKIP] ${signal.symbol} - 无法获取最新行情，跳过`);
+        return null;
+      }
+      const retryPrice = Number(retryQuotes[0].lastDone.toString());
+      const retryThreshold = signal.targetPrice * (1 + priceThresholdPct / 100);
 
-    if (retryPrice <= 0) {
-      console.log(`[SKIP] ${signal.symbol} - 最新价无效: ${retryPrice}，跳过`);
-      return null;
-    }
+      if (retryPrice <= 0) {
+        console.log(`[SKIP] ${signal.symbol} - 最新价无效: ${retryPrice}，跳过`);
+        return null;
+      }
 
-    if (retryPrice > retryThreshold) {
+      if (retryPrice > retryThreshold) {
+        console.log(
+          `[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`,
+        );
+        return null;
+      }
+
+      // Within threshold → submit market order for remaining quantity
       console.log(
-        `[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`,
+        `[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换市价单买入 ${remainingQty} 股...`,
       );
-      return null;
+      const moResp = await tradeCtx.submitOrder({
+        symbol: signal.symbol,
+        orderType: OrderType.MO,
+        side: OrderSide.Buy,
+        timeInForce: TimeInForceType.Day,
+        submittedQuantity: new Decimal(String(remainingQty)),
+        remark: `auto-trade:buy-retry:${signal.record.id}`,
+      });
+
+      filledOrderId = moResp.orderId;
+      console.log(`[OK] 市价单已提交: ${filledOrderId}`);
+
+      trackOrder({
+        orderId: filledOrderId,
+        symbol: signal.symbol,
+        side: "Buy",
+        orderType: "MO",
+        price: String(retryPrice),
+        quantity: String(remainingQty),
+        submittedAt: new Date().toISOString(),
+        signalRecordId: signal.record.id,
+        role: "buy",
+      });
+
+      const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
+      if (moEvent.status !== OrderStatus.Filled) {
+        console.log(
+          `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
+        );
+        removeOrder(filledOrderId);
+        return null;
+      }
+      console.log(`[OK] 市价单已成交: ${filledOrderId}`);
     }
-
-    // Within threshold → submit market order
-    console.log(
-      `[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换市价单买入...`,
-    );
-    const moResp = await tradeCtx.submitOrder({
-      symbol: signal.symbol,
-      orderType: OrderType.MO,
-      side: OrderSide.Buy,
-      timeInForce: TimeInForceType.Day,
-      submittedQuantity: new Decimal(String(qty)),
-      remark: `auto-trade:buy-retry:${signal.record.id}`,
-    });
-
-    filledOrderId = moResp.orderId;
-    console.log(`[OK] 市价单已提交: ${filledOrderId}`);
-
-    trackOrder({
-      orderId: filledOrderId,
-      symbol: signal.symbol,
-      side: "Buy",
-      orderType: "MO",
-      price: String(retryPrice),
-      quantity: String(qty),
-      submittedAt: new Date().toISOString(),
-      signalRecordId: signal.record.id,
-      role: "buy",
-    });
-
-    const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
-    if (moEvent.status !== OrderStatus.Filled) {
-      console.log(
-        `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
-      );
-      removeOrder(filledOrderId);
-      return null;
-    }
-    console.log(`[OK] 市价单已成交: ${filledOrderId}`);
   } else {
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
   }
@@ -354,6 +361,7 @@ export async function executeSignal(
   // Link SL/TP as OCO pair — filling one cancels the other in real-time
   if (stopLossOrderId && takeProfitOrderId) {
     orderWatcher.watchOcoPair(stopLossOrderId, takeProfitOrderId);
+    linkOcoOrders(stopLossOrderId, takeProfitOrderId);
     console.log(`[OK] OCO 已关联: 止损 ${stopLossOrderId} ↔ 止盈 ${takeProfitOrderId}`);
   }
 

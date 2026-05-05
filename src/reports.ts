@@ -20,6 +20,6 @@ function printReports(reports: AnalysisRecord[]): void {
   }
 }
 
-const dbPath = process.env.DB_PATH || "./stock_analysis.db";
+const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
 const reports = fetchRecentReports(dbPath);
 printReports(reports);

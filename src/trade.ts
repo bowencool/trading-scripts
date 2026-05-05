@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const isForce = args.includes("--force");
 
-  const dbPath = process.env.DB_PATH || "./stock_analysis.db";
+  const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
 
   const reports = fetchRecentReports(dbPath);
   console.log(`\n📊 最近 12 小时分析报告: ${reports.length} 条`);
