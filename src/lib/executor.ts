@@ -127,6 +127,7 @@ export async function executeSignal(
   if (signal.takeProfit) {
     console.log(`   止盈: ${signal.takeProfit} (LIT 限价触单)`);
   }
+  console.log(`   ⏳ 限价单等待: 10 秒（超时后自动评估是否切换市价单）`);
 
   // Confirmation
   if (!force) {
@@ -164,15 +165,72 @@ export async function executeSignal(
     role: "buy",
   });
 
-  // Wait for buy order to reach terminal state via WebSocket push (no polling).
-  console.log(`[WAIT] 等待买单 ${buyOrderId} 成交确认... (WebSocket 推送)`);
-  const buyEvent = await orderWatcher.waitForTerminal(buyOrderId);
+  // Wait for buy order to fill within 10 seconds.
+  console.log(`[WAIT] 等待限价买单 ${buyOrderId} 成交... (10 秒超时)`);
+  const buyEvent = await orderWatcher.waitForTerminal(buyOrderId, 10_000);
+
+  let filledOrderId = buyOrderId;
 
   if (buyEvent.status !== OrderStatus.Filled) {
-    console.log(`[SKIP] 买单未成交 (状态: ${orderStatusName(buyEvent.status)})，跳过止损/止盈`);
-    return null;
+    // 10s limit order not filled → re-fetch price, decide retry or skip
+    console.log(`[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)})，重新评估...`);
+
+    removeOrder(buyOrderId);
+
+    const retryQuotes = await quoteCtx.quote([signal.symbol]);
+    if (retryQuotes.length === 0) {
+      console.log(`[SKIP] ${signal.symbol} - 无法获取最新行情，跳过`);
+      return null;
+    }
+    const retryPrice = Number(retryQuotes[0].lastDone.toString());
+    const retryThreshold = signal.targetPrice * (1 + priceThresholdPct / 100);
+
+    if (retryPrice <= 0) {
+      console.log(`[SKIP] ${signal.symbol} - 最新价无效: ${retryPrice}，跳过`);
+      return null;
+    }
+
+    if (retryPrice > retryThreshold) {
+      console.log(`[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`);
+      return null;
+    }
+
+    // Within threshold → submit market order
+    console.log(`[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换市价单买入...`);
+    const moResp = await tradeCtx.submitOrder({
+      symbol: signal.symbol,
+      orderType: OrderType.MO,
+      side: OrderSide.Buy,
+      timeInForce: TimeInForceType.Day,
+      submittedQuantity: new Decimal(String(qty)),
+      remark: `auto-trade:buy-retry:${signal.record.id}`,
+    });
+
+    filledOrderId = moResp.orderId;
+    console.log(`[OK] 市价单已提交: ${filledOrderId}`);
+
+    trackOrder({
+      orderId: filledOrderId,
+      symbol: signal.symbol,
+      side: "Buy",
+      orderType: "MO",
+      price: String(retryPrice),
+      quantity: String(qty),
+      submittedAt: new Date().toISOString(),
+      signalRecordId: signal.record.id,
+      role: "buy",
+    });
+
+    const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
+    if (moEvent.status !== OrderStatus.Filled) {
+      console.log(`[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`);
+      removeOrder(filledOrderId);
+      return null;
+    }
+    console.log(`[OK] 市价单已成交: ${filledOrderId}`);
+  } else {
+    console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
   }
-  console.log(`[OK] 买单已成交: ${buyOrderId}`);
 
   let stopLossOrderId: string | undefined;
   let takeProfitOrderId: string | undefined;
@@ -203,7 +261,7 @@ export async function executeSignal(
         submittedAt: new Date().toISOString(),
         signalRecordId: signal.record.id,
         role: "stop_loss",
-        linkedBuyOrderId: buyOrderId,
+        linkedBuyOrderId: filledOrderId,
       });
     } catch (err) {
       console.error(`[WARN] 止损单提交失败: ${err}`);
@@ -237,7 +295,7 @@ export async function executeSignal(
         submittedAt: new Date().toISOString(),
         signalRecordId: signal.record.id,
         role: "take_profit",
-        linkedBuyOrderId: buyOrderId,
+        linkedBuyOrderId: filledOrderId,
       });
     } catch (err) {
       console.error(`[WARN] 止盈单提交失败: ${err}`);
@@ -250,7 +308,7 @@ export async function executeSignal(
     console.log(`[OK] OCO 已关联: 止损 ${stopLossOrderId} ↔ 止盈 ${takeProfitOrderId}`);
   }
 
-  return { buyOrderId, stopLossOrderId, takeProfitOrderId };
+  return { buyOrderId: filledOrderId, stopLossOrderId, takeProfitOrderId };
 }
 
 export async function executeSellSignal(

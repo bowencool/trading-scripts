@@ -143,6 +143,10 @@ async function main(): Promise<void> {
     // Keep the process alive briefly to allow any final OCO pushes to be processed
     await new Promise((r) => setTimeout(r, 2000));
     await orderWatcher.stop();
+
+    // Longbridge SDK holds open gRPC connections that keep the event loop alive.
+    // Force exit since this is a CLI script, not a long-running server.
+    process.exit(0);
   }
 }
 

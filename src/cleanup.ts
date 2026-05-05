@@ -20,6 +20,9 @@ async function main(): Promise<void> {
   if (pruned > 0) {
     console.log(`🗑️  已清理 ${pruned} 条超过 2 周的过期订单记录`);
   }
+
+  // Longbridge SDK holds open gRPC connections that keep the event loop alive.
+  process.exit(0);
 }
 
 main().catch((err) => {
