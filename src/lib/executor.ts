@@ -1,5 +1,4 @@
 import { QuoteContext, TradeContext, Decimal, OrderType, OrderSide, TimeInForceType, OrderStatus } from "longbridge";
-import { createInterface } from "node:readline";
 import type { TradeSignal, AnalysisRecord } from "./types.js";
 import { loadTrackedOrders, trackOrder, removeOrder } from "./tracker.js";
 import type { OrderWatcher } from "./order-watcher.js";
@@ -42,13 +41,31 @@ function printAnalysisRecord(record: AnalysisRecord): void {
   console.log("=".repeat(80));
 }
 
-async function promptConfirm(message: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+function promptConfirm(message: string): Promise<boolean> {
   return new Promise((resolve) => {
-    rl.question(message, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === "y");
-    });
+    process.stdout.write(message);
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    const onData = (key: string) => {
+      if (key === "\r" || key === "\n") {
+        // Enter = confirm
+        cleanup();
+        process.stdout.write("y\n");
+        resolve(true);
+      } else if (key === "\x1B") {
+        // Esc = cancel
+        cleanup();
+        process.stdout.write("n\n");
+        resolve(false);
+      }
+    };
+    const cleanup = () => {
+      process.stdin.setRawMode?.(false);
+      process.stdin.pause();
+      process.stdin.off("data", onData);
+    };
+    process.stdin.on("data", onData);
   });
 }
 
@@ -131,7 +148,7 @@ export async function executeSignal(
 
   // Confirmation
   if (!force) {
-    const confirmed = await promptConfirm("\n确认下单？(y/n): ");
+    const confirmed = await promptConfirm("\n确认下单？(Enter 确认 / Esc 取消): ");
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
       return null;
@@ -389,7 +406,7 @@ export async function executeSellSignal(
 
   // 6. Confirmation
   if (!force) {
-    const confirmed = await promptConfirm("\n确认卖出？(y/n): ");
+    const confirmed = await promptConfirm("\n确认卖出？(Enter 确认 / Esc 取消): ");
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
       return null;
