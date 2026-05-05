@@ -4,10 +4,10 @@
   "description": "Simple TypeScript trading scripts for local and server use",
   "private": true,
   "scripts": {
-    "start": "tsx --env-file=.env src/trade.ts",
-    "trade": "tsx --env-file=.env src/trade.ts --trade",
-    "trade:force": "tsx --env-file=.env src/trade.ts --trade --force",
-    "trade:cleanup": "tsx --env-file=.env src/cleanup.ts"
+    "reports": "tsx --env-file=.env src/reports.ts",
+    "trade": "tsx --env-file=.env src/trade.ts",
+    "trade:force": "tsx --env-file=.env src/trade.ts --force",
+    "cleanup": "tsx --env-file=.env src/cleanup.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
