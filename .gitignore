@@ -98,6 +98,9 @@ dist
 # vuepress v2.x temp directory
 .temp
 
+# Local sync scripts
+scripts/sync-db.sh
+
 # Sveltekit cache directory
 .svelte-kit/
 
