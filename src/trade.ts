@@ -1,6 +1,11 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import { cleanupOcoOrders, cleanupOrphanedOrders, pruneStaleBuyOrders } from "./lib/cleanup.js";
+import {
+  cleanupOcoOrders,
+  cleanupOrphanedOrders,
+  pruneExpiredOrders,
+  pruneStaleBuyOrders,
+} from "./lib/cleanup.js";
 import { fetchBuySignals, fetchRecentReports, fetchSellSignals } from "./lib/db.js";
 import { executeSellSignal, executeSignal } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
@@ -44,6 +49,13 @@ async function main(): Promise<void> {
   // Check tracked orders via API, remove cancelled/expired/rejected ones
   // so their signals can be re-processed
   await pruneStaleBuyOrders(tradeCtx);
+  await cleanupOrphanedOrders(tradeCtx);
+  await cleanupOcoOrders(tradeCtx);
+
+  const pruned = pruneExpiredOrders();
+  if (pruned > 0) {
+    console.log(`🗑️  已清理 ${pruned} 条超过 2 周的过期订单记录`);
+  }
 
   const submittedIds = getSubmittedRecordIds();
   const records = fetchBuySignals(dbPath, [...submittedIds]);
@@ -98,12 +110,6 @@ async function main(): Promise<void> {
   // Start WebSocket order push listener
   const orderWatcher = new OrderWatcher(tradeCtx);
   await orderWatcher.start();
-
-  // Auto-cleanup orphaned orders before trading
-  await cleanupOrphanedOrders(tradeCtx);
-
-  // Auto-cleanup OCO pairs (cancel the surviving order when its pair has filled)
-  await cleanupOcoOrders(tradeCtx);
 
   // Register remaining OCO pairs with the watcher for real-time monitoring
   const remainingOrders = loadTrackedOrders();

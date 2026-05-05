@@ -7,7 +7,7 @@
     "reports": "tsx --env-file=.env src/reports.ts",
     "trade": "tsx --env-file=.env src/trade.ts",
     "trade:force": "tsx --env-file=.env src/trade.ts --force",
-    "cleanup": "tsx --env-file=.env src/cleanup.ts",
+
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
