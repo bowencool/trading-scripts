@@ -10,5 +10,5 @@ export async function buildConfig(clientId: string): Promise<Config> {
     console.log(url);
     console.log("");
   });
-  return Config.fromOAuth(oauth);
+  return Config.fromOAuth(oauth, { enablePrintQuotePackages: false });
 }
