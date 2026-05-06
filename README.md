@@ -107,3 +107,5 @@ docker run --rm \
 | ------------------- | ------------------------------------------------------------ |
 | `/app/data`         | `stock_analysis.db`（只读）+ `submitted_orders.json`（读写） |
 | `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                         |
+
+> **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
