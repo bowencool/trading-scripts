@@ -30,7 +30,7 @@ function queryWithExclusion(
       ${whereClause}
       ${excludeClause}
   )
-  ${SELECT_COLUMNS}
+  SELECT ${SELECT_COLUMNS}
   FROM ranked WHERE rn = 1
   ORDER BY created_at DESC
 `);
@@ -56,12 +56,12 @@ export function queryAll(
     const buySignals = queryWithExclusion(
       db,
       excludeRecordIds,
-      "AND (operation_advice LIKE '%买入%' OR operation_advice LIKE '%加仓%')\n          AND ideal_buy IS NOT NULL",
+      "AND operation_advice IN ('买入', '加仓')\n          AND ideal_buy IS NOT NULL",
     );
     const sellSignals = queryWithExclusion(
       db,
       excludeRecordIds,
-      "AND (operation_advice LIKE '%卖出%' OR operation_advice LIKE '%减仓%')\n          AND take_profit IS NOT NULL",
+      "AND operation_advice IN ('卖出', '减仓')\n          AND take_profit IS NOT NULL",
     );
     const recentReports = queryWithExclusion(db, [], "");
     return { buySignals, sellSignals, recentReports };
