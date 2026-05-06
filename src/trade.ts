@@ -11,18 +11,81 @@ import { executeSellSignal, executeSignal, patchMissingSlTp } from "./lib/execut
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
 import { drainWrites, getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
-import type { TradeSignal } from "./lib/types.js";
+import type { AnalysisRecord, TradeSignal } from "./lib/types.js";
+
+function printDryRunSignals(
+  buySignals: AnalysisRecord[],
+  sellRecords: AnalysisRecord[],
+  priceThresholdPct: number,
+  positionPct: number,
+): void {
+  const allSignals = [
+    ...buySignals.map((r) => ({ record: r, side: "买入" as const })),
+    ...sellRecords.map((r) => ({
+      record: r,
+      side: (r.operation_advice ?? "").includes("减仓") ? ("减仓" as const) : ("卖出" as const),
+    })),
+  ];
+
+  if (allSignals.length === 0) {
+    console.log("没有符合条件的交易信号。");
+    return;
+  }
+
+  console.log(
+    `\n找到 ${allSignals.length} 个信号待处理（${buySignals.length} 买入 / ${sellRecords.length} 卖出）\n`,
+  );
+
+  for (const { record, side } of allSignals) {
+    const symbol = toLongbridgeSymbol(record.code);
+    const symbolDisplay = symbol ?? record.code;
+
+    console.log(`${"=".repeat(80)}`);
+    console.log(`🔹 [${record.code}] ${record.name ?? "未知"} → ${symbolDisplay}`);
+    console.log(`   报告类型: ${record.report_type ?? "-"} | 时间: ${record.created_at}`);
+    console.log(
+      `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`,
+    );
+    console.log(
+      `   理想买入: ${record.ideal_buy ?? "-"} | 次选买入: ${record.secondary_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
+    );
+    if (record.analysis_summary) {
+      console.log(`   摘要: ${record.analysis_summary}`);
+    }
+
+    if (side === "买入" && record.ideal_buy) {
+      const threshold = record.ideal_buy * (1 + priceThresholdPct / 100);
+      console.log(`\n   📋 交易计划:`);
+      console.log(
+        `      方向: 买入 | 目标价: ${record.ideal_buy} | 价格阈值: +${priceThresholdPct}% → ${threshold.toFixed(2)}`,
+      );
+      if (record.stop_loss) console.log(`      止损: ${record.stop_loss} (MIT 市价触单)`);
+      if (record.take_profit) console.log(`      止盈: ${record.take_profit} (LIT 限价触单)`);
+      console.log(`      仓位比例: ${positionPct}%（需连接 Longbridge 才能计算具体数量）`);
+    } else if (side === "卖出") {
+      console.log(`\n   📋 交易计划:`);
+      console.log(`      方向: ${side} | 模式: ${side === "减仓" ? "部分减仓" : "全部清仓"}`);
+    } else {
+      console.log(`\n   📋 交易计划:`);
+      console.log(`      方向: ${side} | 目标价: ${record.ideal_buy ?? "-"}`);
+    }
+    console.log(`${"=".repeat(80)}`);
+  }
+}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const isAutoApprove = args.includes("--auto-approve");
+  const isDryRun = args.includes("--dry-run");
 
   const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
 
-  const clientId = process.env.CLIENT_ID;
-  if (!clientId) {
-    console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
-    process.exit(1);
+  if (!isDryRun) {
+    const clientId = process.env.CLIENT_ID;
+    if (!clientId) {
+      console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
+      process.exit(1);
+    }
   }
 
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
@@ -38,7 +101,22 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Dry-run: query DB and print signals without connecting to Longbridge
+  if (isDryRun) {
+    const submittedIds = getSubmittedRecordIds();
+    const {
+      buySignals,
+      sellSignals: sellRecords,
+      recentReports,
+    } = queryAll(dbPath, [...submittedIds]);
+    console.log(`🔍 [DRY RUN] 模拟运行，不会实际下单\n`);
+    console.log(`📊 最近 12 小时分析报告: ${recentReports.length} 条`);
+    printDryRunSignals(buySignals, sellRecords, priceThresholdPct, positionPct);
+    return;
+  }
+
   console.log("🔐 正在连接 Longbridge...");
+  const clientId = process.env.CLIENT_ID ?? "";
   const config = await buildConfig(clientId);
   const quoteCtx = QuoteContext.new(config);
   const tradeCtx = TradeContext.new(config);

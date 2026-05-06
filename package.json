@@ -7,6 +7,7 @@
     "reports": "tsx --env-file=.env src/reports.ts",
     "trade": "tsx --env-file=.env src/trade.ts",
     "trade:auto": "tsx --env-file=.env src/trade.ts --auto-approve",
+    "trade:dry": "tsx --env-file=.env src/trade.ts --dry-run",
 
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
