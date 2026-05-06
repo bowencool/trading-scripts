@@ -15,30 +15,6 @@
 - 订单追踪，防止重复下单
 - 支持人工确认和全自动 (`--auto-approve`) 两种模式
 
-## 快速开始
-
-### 1. 注册 OAuth Client
-
-```bash
-curl -X POST https://openapi.longbridge.com/oauth2/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "client_name": "Trading Scripts",
-    "redirect_uris": ["http://localhost:60355/callback"],
-    "grant_types": ["authorization_code", "refresh_token"]
-  }'
-```
-
-保存返回的 `client_id`。
-
-### 2. 配置环境变量
-
-复制 `.env.example` 为 `.env` 并填入你的配置。
-
-首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
-
-> **提示**：可以使用模拟账户完成授权和测试，无需真实资金。
-
 ## 交易流程
 
 ```
@@ -64,6 +40,30 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
     ↓
 记录到 submitted_orders.json（防重复）
 ```
+
+## 快速开始
+
+### 1. 注册 OAuth Client
+
+```bash
+curl -X POST https://openapi.longbridge.com/oauth2/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "Trading Scripts",
+    "redirect_uris": ["http://localhost:60355/callback"],
+    "grant_types": ["authorization_code", "refresh_token"]
+  }'
+```
+
+保存返回的 `client_id`。
+
+### 2. 配置环境变量
+
+复制 `.env.example` 为 `.env` 并填入你的配置。
+
+首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+
+> **提示**：可以使用模拟账户完成授权和测试，无需真实资金。
 
 ## Docker
 
@@ -103,8 +103,7 @@ docker run --rm \
 
 **挂载说明**
 
-| 容器路径 | 说明 |
-|----------|------|
-| `/app/data` | `stock_analysis.db`（只读）+ `submitted_orders.json`（读写） |
-| `/root/.longbridge` | OAuth token 缓存（首次授权后可复用） |
-
+| 容器路径            | 说明                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| `/app/data`         | `stock_analysis.db`（只读）+ `submitted_orders.json`（读写） |
+| `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                         |
