@@ -1,14 +1,17 @@
-FROM node:22-slim AS base
+FROM ubuntu:noble
 
-RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    corepack enable && corepack prepare pnpm@10.33.2 --activate && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# ── dependencies ──────────────────────────────────────────────
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile && pnpm store prune
 
-# ── application ───────────────────────────────────────────────
 COPY src/ src/
 COPY tsconfig.json ./
 
