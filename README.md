@@ -33,7 +33,7 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 
 ### 2. 配置环境变量
 
-编辑 `.env`，详见下方[环境变量](#环境变量)表格。
+复制 `.env.example` 为 `.env` 并填入你的配置。
 
 首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
@@ -64,13 +64,3 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
     ↓
 记录到 submitted_orders.json（防重复）
 ```
-
-## 环境变量
-
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `CLIENT_ID` | 是 | - | Longbridge OAuth client ID |
-| `DB_PATH` | 否 | `./stock_analysis.db` | SQLite 数据库路径 |
-| `PRICE_THRESHOLD_PCT` | 否 | `2` | 当前价超出目标价此百分比内仍下单 |
-| `POSITION_PCT` | 否 | `20` | 单个持仓占账户净资产的百分比 |
-
