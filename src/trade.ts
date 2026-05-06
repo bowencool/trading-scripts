@@ -135,10 +135,14 @@ async function main(): Promise<void> {
     priceThresholdPct,
   };
   for (const signal of signals) {
-    if (signal.side === "Buy") {
-      await executeSignal(execConfig, signal);
-    } else {
-      await executeSellSignal(execConfig, signal);
+    try {
+      if (signal.side === "Buy") {
+        await executeSignal(execConfig, signal);
+      } else {
+        await executeSellSignal(execConfig, signal);
+      }
+    } catch (err) {
+      console.error(`[ERR] ${signal.symbol} 处理异常，跳过: ${err}`);
     }
   }
 

@@ -70,33 +70,7 @@ export function queryAll(
   }
 }
 
-/** Convenience wrappers for callers that need only one query type. */
-export function fetchBuySignals(dbPath: string, excludeRecordIds: number[]): AnalysisRecord[] {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return queryWithExclusion(
-      db,
-      excludeRecordIds,
-      "AND (operation_advice LIKE '%买入%' OR operation_advice LIKE '%加仓%')\n          AND ideal_buy IS NOT NULL",
-    );
-  } finally {
-    db.close();
-  }
-}
-
-export function fetchSellSignals(dbPath: string, excludeRecordIds: number[]): AnalysisRecord[] {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return queryWithExclusion(
-      db,
-      excludeRecordIds,
-      "AND (operation_advice LIKE '%卖出%' OR operation_advice LIKE '%减仓%')\n          AND take_profit IS NOT NULL",
-    );
-  } finally {
-    db.close();
-  }
-}
-
+/** Convenience wrapper for callers that only need recent reports. */
 export function fetchRecentReports(dbPath: string): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {

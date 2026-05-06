@@ -29,11 +29,14 @@ export function removeOrder(orderId: string): void {
   enqueueWrite((orders) => orders.filter((o) => o.orderId !== orderId));
 }
 
-function enqueueWrite(mutator: (orders: TrackedOrder[]) => TrackedOrder[]): void {
+function enqueueWrite(mutator: (orders: TrackedOrder[]) => TrackedOrder[] | null): void {
   writeLock = writeLock
     .then(() => {
       const orders = loadTrackedOrders();
-      saveOrders(mutator(orders));
+      const result = mutator(orders);
+      if (result) {
+        saveOrders(result);
+      }
     })
     .catch((err) => {
       console.error(`[TRACKER] Failed to write orders: ${err}`);
@@ -98,6 +101,6 @@ export function linkOcoOrders(orderId1: string, orderId2: string): void {
         changed = true;
       }
     }
-    return changed ? orders : orders; // always return the list so saveOrders runs under lock
+    return changed ? orders : null;
   });
 }

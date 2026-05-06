@@ -70,12 +70,12 @@ function promptConfirm(message: string): Promise<boolean> {
   });
 }
 
-function getCurrency(symbol: string): string {
+function getCurrency(symbol: string): string | null {
   if (symbol.endsWith(".HK")) return "HKD";
   if (symbol.endsWith(".US")) return "USD";
   if (symbol.endsWith(".SH") || symbol.endsWith(".SZ")) return "CNY";
   if (symbol.endsWith(".SG")) return "SGD";
-  return "HKD";
+  return null;
 }
 
 const MAX_SUBMIT_RETRIES = 2;
@@ -117,6 +117,10 @@ export async function executeSignal(
   printAnalysisRecord(signal.record);
 
   const currency = getCurrency(signal.symbol);
+  if (!currency) {
+    console.log(`[SKIP] ${signal.symbol} - 未知货币后缀`);
+    return null;
+  }
 
   // Get current price, lot size, and account balance in parallel
   const [quotes, staticInfos, balances] = await Promise.all([
@@ -296,8 +300,8 @@ export async function executeSignal(
         const moDetail = await tradeCtx.orderDetail(filledOrderId);
         const moFilledQty = Number(moDetail.executedQuantity.toString());
         totalFilledQty = buyFilledQty + moFilledQty;
-        removeOrder(filledOrderId);
         if (totalFilledQty <= 0) {
+          removeOrder(filledOrderId);
           console.log(
             `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
           );

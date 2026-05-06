@@ -39,11 +39,22 @@ export class OrderWatcher {
     console.log("[WS] 订单推送已订阅");
   }
 
-  /** Stop listening. */
+  /** Stop listening and clean up all pending state. */
   async stop(): Promise<void> {
     if (!this.started) return;
     await this.tradeCtx.unsubscribe([TopicType.Private]);
     this.started = false;
+
+    // Resolve all pending waits and clear all timers
+    for (const [orderId, { resolve }] of this.pending) {
+      resolve({ orderId, status: OrderStatus.Canceled } as PushOrderChanged);
+    }
+    this.pending.clear();
+    for (const t of this.timers.values()) {
+      clearTimeout(t);
+    }
+    this.timers.clear();
+    this.ocoPairs.clear();
   }
 
   /**
