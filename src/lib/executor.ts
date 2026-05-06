@@ -196,19 +196,22 @@ export async function executeSignal(
   console.log(`[WAIT] 等待限价买单 ${buyOrderId} 成交... (10 秒超时)`);
   const buyEvent = await orderWatcher.waitForTerminal(buyOrderId, 10_000);
 
+  // Always query orderDetail for accurate executedQuantity (WS push may lack it)
+  const buyDetail = await tradeCtx.orderDetail(buyOrderId);
+  const buyFilledQty = Number(buyDetail.executedQuantity.toString());
+
   let filledOrderId = buyOrderId;
+  let totalFilledQty = buyFilledQty;
 
   if (buyEvent.status !== OrderStatus.Filled) {
-    // 10s limit order not filled → re-fetch price, decide retry or skip
-    const partialFilledQty = Number((buyEvent.executedQuantity ?? new Decimal("0")).toString());
-    const remainingQty = qty - partialFilledQty;
+    const remainingQty = qty - buyFilledQty;
 
     console.log(
-      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)}${partialFilledQty > 0 ? `, 已部分成交 ${partialFilledQty} 股` : ""})，重新评估...`,
+      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)}${buyFilledQty > 0 ? `, 已部分成交 ${buyFilledQty} 股` : ""})，重新评估...`,
     );
 
     if (remainingQty <= 0) {
-      console.log(`[OK] 限价单 ${buyOrderId} 实际已全部成交`);
+      console.log(`[OK] 限价单 ${buyOrderId} 实际已全部成交 ${buyFilledQty} 股`);
     } else {
       removeOrder(buyOrderId);
 
@@ -268,7 +271,9 @@ export async function executeSignal(
         removeOrder(filledOrderId);
         return null;
       }
-      console.log(`[OK] 市价单已成交: ${filledOrderId}`);
+      const moDetail = await tradeCtx.orderDetail(filledOrderId);
+      totalFilledQty = buyFilledQty + Number(moDetail.executedQuantity.toString());
+      console.log(`[OK] 市价单已成交，总成交: ${totalFilledQty} 股`);
     }
   } else {
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
@@ -285,7 +290,7 @@ export async function executeSignal(
         orderType: OrderType.MIT,
         side: OrderSide.Sell,
         timeInForce: TimeInForceType.GoodTilCanceled,
-        submittedQuantity: new Decimal(String(qty)),
+        submittedQuantity: new Decimal(String(totalFilledQty)),
         triggerPrice: new Decimal(String(signal.stopLoss)),
         remark: `auto-trade:sl:${signal.record.id}`,
       });
@@ -299,7 +304,7 @@ export async function executeSignal(
         orderType: "MIT",
         price: "0",
         triggerPrice: String(signal.stopLoss),
-        quantity: String(qty),
+        quantity: String(totalFilledQty),
         submittedAt: new Date().toISOString(),
         signalRecordId: signal.record.id,
         role: "stop_loss",
@@ -318,7 +323,7 @@ export async function executeSignal(
         orderType: OrderType.LIT,
         side: OrderSide.Sell,
         timeInForce: TimeInForceType.GoodTilCanceled,
-        submittedQuantity: new Decimal(String(qty)),
+        submittedQuantity: new Decimal(String(totalFilledQty)),
         triggerPrice: new Decimal(String(signal.takeProfit)),
         submittedPrice: new Decimal(String(signal.takeProfit)),
         remark: `auto-trade:tp:${signal.record.id}`,
@@ -333,7 +338,7 @@ export async function executeSignal(
         orderType: "LIT",
         price: String(signal.takeProfit),
         triggerPrice: String(signal.takeProfit),
-        quantity: String(qty),
+        quantity: String(totalFilledQty),
         submittedAt: new Date().toISOString(),
         signalRecordId: signal.record.id,
         role: "take_profit",
@@ -424,7 +429,23 @@ export async function executeSellSignal(
   const currentPrice = quotes.length > 0 ? Number(quotes[0].lastDone.toString()) : 0;
   const costPrice = Number(pos.costPrice.toString());
 
-  // 5. Print trade plan
+  if (currentPrice <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价: ${currentPrice}`);
+    return null;
+  }
+
+  // 5. Price threshold check: if target sell price is too far above current price, skip
+  if (signal.targetPrice > 0) {
+    const threshold = signal.targetPrice * (1 - execConfig.priceThresholdPct / 100);
+    if (currentPrice < threshold) {
+      console.log(
+        `[SKIP] ${signal.symbol} - 当前价 ${currentPrice} 低于目标卖出价 ${signal.targetPrice} 的 ${execConfig.priceThresholdPct}% 阈值 (${threshold.toFixed(2)})，限价单不会成交`,
+      );
+      return null;
+    }
+  }
+
+  // 6. Print trade plan
   const sellPrice = signal.targetPrice > 0 ? signal.targetPrice : currentPrice;
   const orderType = signal.targetPrice > 0 ? "限价单 (LO)" : "市价单 (MO)";
   console.log(`\n📋 卖出计划:`);
@@ -432,7 +453,7 @@ export async function executeSellSignal(
   console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
   console.log(`   模式: ${isPartial ? "减仓" : "清仓"}`);
 
-  // 6. Confirmation
+  // 7. Confirmation
   if (!autoApprove) {
     const confirmed = await promptConfirm("\n确认卖出？(Enter 确认 / Esc 取消): ");
     if (!confirmed) {
@@ -441,7 +462,7 @@ export async function executeSellSignal(
     }
   }
 
-  // 7. Submit sell order
+  // 8. Submit sell order
   const remark = isPartial
     ? `auto-trade:reduce:${signal.record.id}`
     : `auto-trade:sell:${signal.record.id}`;
@@ -460,7 +481,7 @@ export async function executeSellSignal(
     `[OK] 卖出单已提交: ${sellOrderId} (${isPartial ? "减仓" : "清仓"} ${sellQty} 股 @ ${sellPrice})`,
   );
 
-  // 8. Track sell order
+  // 9. Track sell order
   trackOrder({
     orderId: sellOrderId,
     symbol: signal.symbol,
@@ -472,6 +493,38 @@ export async function executeSellSignal(
     signalRecordId: signal.record.id,
     role: "sell",
   });
+
+  // 10. Wait for sell order to reach terminal state (30s timeout for limit orders)
+  if (signal.targetPrice > 0) {
+    console.log(`[WAIT] 等待限价卖单 ${sellOrderId} 成交... (30 秒超时)`);
+    const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, 30_000);
+    if (sellEvent.status === OrderStatus.Filled) {
+      console.log(`[OK] 限价卖单 ${sellOrderId} 已成交`);
+    } else {
+      const filledDetail = await tradeCtx.orderDetail(sellOrderId);
+      const filledQty = Number(filledDetail.executedQuantity.toString());
+      if (filledQty > 0) {
+        console.log(`[OK] 限价卖单 ${sellOrderId} 部分成交 ${filledQty} 股`);
+      } else {
+        console.log(
+          `[WARN] 限价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})`,
+        );
+      }
+      removeOrder(sellOrderId);
+    }
+  } else {
+    // Market orders: wait briefly for confirmation
+    console.log(`[WAIT] 等待市价卖单 ${sellOrderId} 成交... (10 秒)`);
+    const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, 10_000);
+    if (sellEvent.status === OrderStatus.Filled) {
+      console.log(`[OK] 市价卖单 ${sellOrderId} 已成交`);
+    } else {
+      console.log(
+        `[WARN] 市价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})`,
+      );
+      removeOrder(sellOrderId);
+    }
+  }
 
   return { sellOrderId };
 }

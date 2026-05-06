@@ -1,6 +1,6 @@
 import { OrderStatus, type TradeContext } from "longbridge";
 import { loadTrackedOrders, removeOrder } from "./tracker.js";
-import { isTerminal } from "./utils.js";
+import { isTerminal, orderStatusName } from "./utils.js";
 
 /**
  * Check tracked buy/sell orders via API and remove any that have reached a
@@ -127,16 +127,14 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
         tradeCtx.orderDetail(pairId),
       ]);
 
-      // If both already in terminal state, just clean up tracking
+      // If both already in terminal state, clean up tracking
       if (isTerminal(detail.status) && isTerminal(pairDetail.status)) {
-        if (detail.status === OrderStatus.Filled || pairDetail.status === OrderStatus.Filled) {
-          console.log(
-            `[OCO] 订单 ${order.orderId} (${order.role}) 与 ${pairId} 均已结束，清理跟踪记录`,
-          );
-          removeOrder(order.orderId);
-          removeOrder(pairId);
-          ocoCleaned++;
-        }
+        console.log(
+          `[OCO] 订单 ${order.orderId} (${order.role}, ${orderStatusName(detail.status)}) 与 ${pairId} (${orderStatusName(pairDetail.status)}) 均已结束，清理跟踪记录`,
+        );
+        removeOrder(order.orderId);
+        removeOrder(pairId);
+        ocoCleaned++;
         continue;
       }
 

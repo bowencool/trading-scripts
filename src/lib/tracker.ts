@@ -4,6 +4,9 @@ import type { TrackedOrder } from "./types.js";
 
 const TRACKER_FILE = resolve(__dirname, "../../data/submitted_orders.json");
 
+/** Simple promise-based mutex to serialize file writes. */
+let writeLock: Promise<void> = Promise.resolve();
+
 export function loadTrackedOrders(): TrackedOrder[] {
   if (!existsSync(TRACKER_FILE)) return [];
   try {
@@ -16,14 +19,21 @@ export function loadTrackedOrders(): TrackedOrder[] {
 }
 
 export function trackOrder(order: TrackedOrder): void {
-  const orders = loadTrackedOrders();
-  orders.push(order);
-  saveOrders(orders);
+  enqueueWrite((orders) => {
+    orders.push(order);
+    return orders;
+  });
 }
 
 export function removeOrder(orderId: string): void {
-  const orders = loadTrackedOrders().filter((o) => o.orderId !== orderId);
-  saveOrders(orders);
+  enqueueWrite((orders) => orders.filter((o) => o.orderId !== orderId));
+}
+
+function enqueueWrite(mutator: (orders: TrackedOrder[]) => TrackedOrder[]): void {
+  writeLock = writeLock.then(() => {
+    const orders = loadTrackedOrders();
+    saveOrders(mutator(orders));
+  });
 }
 
 function saveOrders(orders: TrackedOrder[]): void {
@@ -51,6 +61,7 @@ export function pruneExpiredOrders(): number {
     (o) => now - new Date(o.submittedAt).getTime() < MAX_AGE_MS,
   );
   if (expired.length > 0) {
+    // Use direct save (called at startup before any async operations)
     saveOrders(kept);
   }
   return expired.length;
@@ -67,16 +78,17 @@ function partition<T>(arr: T[], predicate: (item: T) => boolean): [T[], T[]] {
 
 /** Link two orders as an OCO pair so that filling one cancels the other. */
 export function linkOcoOrders(orderId1: string, orderId2: string): void {
-  const orders = loadTrackedOrders();
-  let changed = false;
-  for (const o of orders) {
-    if (o.orderId === orderId1) {
-      o.ocoPairOrderId = orderId2;
-      changed = true;
-    } else if (o.orderId === orderId2) {
-      o.ocoPairOrderId = orderId1;
-      changed = true;
+  enqueueWrite((orders) => {
+    let changed = false;
+    for (const o of orders) {
+      if (o.orderId === orderId1) {
+        o.ocoPairOrderId = orderId2;
+        changed = true;
+      } else if (o.orderId === orderId2) {
+        o.ocoPairOrderId = orderId1;
+        changed = true;
+      }
     }
-  }
-  if (changed) saveOrders(orders);
+    return changed ? orders : orders; // always return the list so saveOrders runs under lock
+  });
 }
