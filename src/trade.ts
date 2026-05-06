@@ -7,7 +7,7 @@ import {
   pruneStaleBuyOrders,
 } from "./lib/cleanup.js";
 import { queryAll } from "./lib/db.js";
-import { executeSellSignal, executeSignal } from "./lib/executor.js";
+import { executeSellSignal, executeSignal, patchMissingSlTp } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
 import { drainWrites, getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
@@ -48,6 +48,8 @@ async function main(): Promise<void> {
   await pruneStaleBuyOrders(tradeCtx);
   await cleanupOrphanedOrders(tradeCtx);
   await cleanupOcoOrders(tradeCtx);
+  // Check for filled buy orders missing SL/TP (from prior crash)
+  await patchMissingSlTp(tradeCtx);
 
   const pruned = pruneExpiredOrders();
   if (pruned > 0) {
@@ -94,7 +96,7 @@ async function main(): Promise<void> {
       record,
       symbol,
       side: "Sell",
-      targetPrice: record.take_profit ?? 0,
+      targetPrice: record.take_profit,
       stopLoss: null,
       takeProfit: null,
       sellMode: isPartial ? "reduce" : "full",
@@ -148,7 +150,12 @@ async function main(): Promise<void> {
 
   // Keep the process alive briefly to allow any final OCO pushes to be processed
   await new Promise((r) => setTimeout(r, 2000));
-  await orderWatcher.stop();
+
+  try {
+    await orderWatcher.stop();
+  } catch (err) {
+    console.error(`[WARN] 关闭 OrderWatcher 失败: ${err}`);
+  }
 
   // Flush any pending order tracking writes before exit
   await drainWrites();

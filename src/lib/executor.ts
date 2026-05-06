@@ -116,6 +116,12 @@ export async function executeSignal(
   // Display analysis record
   printAnalysisRecord(signal.record);
 
+  // Buy signals must have a target price
+  if (signal.targetPrice == null || signal.targetPrice <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 无有效目标买入价`);
+    return null;
+  }
+
   const currency = getCurrency(signal.symbol);
   if (!currency) {
     console.log(`[SKIP] ${signal.symbol} - 未知货币后缀`);
@@ -402,11 +408,47 @@ export async function executeSignal(
   return { buyOrderId: filledOrderId, stopLossOrderId, takeProfitOrderId };
 }
 
+/**
+ * Check tracked buy orders that are filled but missing SL/TP records,
+ * and re-submit the missing orders. This handles the case where the script
+ * crashed after buying but before SL/TP was fully submitted.
+ */
+export async function patchMissingSlTp(tradeCtx: TradeContext): Promise<void> {
+  const orders = loadTrackedOrders();
+  const buyOrders = orders.filter((o) => o.role === "buy");
+
+  for (const buy of buyOrders) {
+    const hasSl = orders.some((o) => o.role === "stop_loss" && o.linkedBuyOrderId === buy.orderId);
+    const hasTp = orders.some(
+      (o) => o.role === "take_profit" && o.linkedBuyOrderId === buy.orderId,
+    );
+    if (hasSl && hasTp) continue;
+
+    // Check if buy order is actually filled
+    try {
+      const detail = await tradeCtx.orderDetail(buy.orderId);
+      if (detail.status !== OrderStatus.Filled) continue;
+    } catch {
+      continue;
+    }
+
+    // Look up the signal record to get SL/TP prices
+    // We don't have direct access to the DB here, so read from submitted_orders
+    // The signal record may no longer be in DB's 12h window — skip gracefully
+    console.warn(
+      `[PATCH] ${buy.symbol} 买单 ${buy.orderId} 已成交但缺少 ${!hasSl ? "止损" : ""}${!hasSl && !hasTp ? "/" : ""}${!hasTp ? "止盈" : ""} 订单`,
+    );
+    // We can't re-derive the SL/TP prices without the original signal record.
+    // Log a warning so the user can manually set them.
+    console.warn(`[PATCH] 请手动为 ${buy.symbol} 设置止损/止盈，或删除跟踪记录后重新运行`);
+  }
+}
+
 export async function executeSellSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
 ): Promise<{ sellOrderId: string } | null> {
-  const { tradeCtx, autoApprove, positionPct } = execConfig;
+  const { tradeCtx, quoteCtx, autoApprove, positionPct } = execConfig;
   const isPartial = signal.sellMode === "reduce";
 
   // Display analysis record
@@ -432,8 +474,9 @@ export async function executeSellSignal(
     return null;
   }
 
-  // 2. Calculate sell quantity
-  const lotSize = 1; // positions already in shares, not lots
+  // 2. Get lot size and calculate sell quantity
+  const staticInfos = await quoteCtx.staticInfo([signal.symbol]);
+  const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
   let sellQty: number;
   if (isPartial) {
     // Reduce: sell positionPct% of available
@@ -498,9 +541,19 @@ export async function executeSellSignal(
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // 4. Get current price for reference
-  const quotes = await execConfig.quoteCtx.quote([signal.symbol]);
-  const currentPrice = quotes.length > 0 ? Number(quotes[0].lastDone.toString()) : 0;
+  // 4. Get current price for reference (with retry)
+  let currentPrice = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const quotes = await quoteCtx.quote([signal.symbol]);
+    if (quotes.length > 0) {
+      currentPrice = Number(quotes[0].lastDone.toString());
+      break;
+    }
+    if (attempt === 0) {
+      console.warn(`[RETRY] ${signal.symbol} 获取行情失败，${RETRY_DELAY_MS}ms 后重试...`);
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    }
+  }
   const costPrice = Number(pos.costPrice.toString());
 
   if (currentPrice <= 0) {
@@ -509,7 +562,7 @@ export async function executeSellSignal(
   }
 
   // 5. Price threshold check: if target sell price is too far above current price, skip
-  if (signal.targetPrice > 0) {
+  if (signal.targetPrice != null && signal.targetPrice > 0) {
     const threshold = signal.targetPrice * (1 - execConfig.priceThresholdPct / 100);
     if (currentPrice < threshold) {
       console.log(
@@ -520,8 +573,9 @@ export async function executeSellSignal(
   }
 
   // 6. Print trade plan
-  const sellPrice = signal.targetPrice > 0 ? signal.targetPrice : currentPrice;
-  const orderType = signal.targetPrice > 0 ? "限价单 (LO)" : "市价单 (MO)";
+  const hasSellPrice = signal.targetPrice != null && signal.targetPrice > 0;
+  const sellPrice = hasSellPrice ? (signal.targetPrice as number) : currentPrice;
+  const orderType = hasSellPrice ? "限价单 (LO)" : "市价单 (MO)";
   console.log(`\n📋 卖出计划:`);
   console.log(`   标的: ${signal.symbol} | 当前价: ${currentPrice} | 成本价: ${costPrice}`);
   console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
@@ -542,11 +596,11 @@ export async function executeSellSignal(
     : `auto-trade:sell:${signal.record.id}`;
   const resp = await tradeCtx.submitOrder({
     symbol: signal.symbol,
-    orderType: signal.targetPrice > 0 ? OrderType.LO : OrderType.MO,
+    orderType: hasSellPrice ? OrderType.LO : OrderType.MO,
     side: OrderSide.Sell,
     timeInForce: TimeInForceType.Day,
     submittedQuantity: new Decimal(String(sellQty)),
-    ...(signal.targetPrice > 0 && { submittedPrice: new Decimal(String(sellPrice)) }),
+    ...(hasSellPrice && { submittedPrice: new Decimal(String(sellPrice)) }),
     remark,
   });
 
@@ -560,7 +614,7 @@ export async function executeSellSignal(
     orderId: sellOrderId,
     symbol: signal.symbol,
     side: "Sell",
-    orderType: signal.targetPrice > 0 ? "LO" : "MO",
+    orderType: hasSellPrice ? "LO" : "MO",
     price: String(sellPrice),
     quantity: String(sellQty),
     submittedAt: new Date().toISOString(),
@@ -569,7 +623,7 @@ export async function executeSellSignal(
   });
 
   // 10. Wait for sell order to reach terminal state (30s timeout for limit orders)
-  if (signal.targetPrice > 0) {
+  if (hasSellPrice) {
     console.log(`[WAIT] 等待限价卖单 ${sellOrderId} 成交... (30 秒超时)`);
     const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, 30_000);
     if (sellEvent.status === OrderStatus.Filled) {

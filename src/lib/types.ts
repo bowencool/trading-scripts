@@ -18,7 +18,8 @@ export interface TradeSignal {
   record: AnalysisRecord;
   symbol: string;
   side: "Buy" | "Sell";
-  targetPrice: number;
+  /** null means market order (no target price). */
+  targetPrice: number | null;
   stopLoss: number | null;
   takeProfit: number | null;
   sellMode?: "full" | "reduce";
