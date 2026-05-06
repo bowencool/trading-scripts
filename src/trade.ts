@@ -78,7 +78,11 @@ async function main(): Promise<void> {
   const isAutoApprove = args.includes("--auto-approve");
   const isDryRun = args.includes("--dry-run");
 
-  const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
+  const dbPath = process.env.DB_PATH;
+  if (!dbPath) {
+    console.error("错误: 请在 .env 中设置 DB_PATH（stock_analysis.db 文件路径）");
+    process.exit(1);
+  }
 
   if (!isDryRun) {
     const clientId = process.env.CLIENT_ID;

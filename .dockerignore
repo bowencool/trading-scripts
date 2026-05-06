@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.*
+!.env.example
+data/
+.git
+.gitignore
+.claude
+.husky
+.vscode
+scripts/
+biome.json
+README.md

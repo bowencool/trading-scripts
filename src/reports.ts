@@ -20,6 +20,10 @@ function printReports(reports: AnalysisRecord[]): void {
   }
 }
 
-const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
+const dbPath = process.env.DB_PATH;
+if (!dbPath) {
+  console.error("错误: 请在 .env 中设置 DB_PATH（stock_analysis.db 文件路径）");
+  process.exit(1);
+}
 const reports = fetchRecentReports(dbPath);
 printReports(reports);

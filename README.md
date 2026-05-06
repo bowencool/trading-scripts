@@ -52,15 +52,59 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
     ↓
 ┌─── 买入信号 ────────────────────────────────┐
 │ 查询行情 → 检查价格阈值 → 计算数量（尊重手数） │
-│ 展示计划 → 人工确认（--force 跳过）           │
+│ 展示计划 → 人工确认（--auto-approve 跳过）    │
 │ 提交 LO → 等待成交（10s 超时降级为 MO）       │
 │ 成交后 → 提交 MIT 止损 + LIT 止盈 → OCO 绑定 │
 └──────────────────────────────────────────────┘
 ┌─── 卖出信号 ────────────────────────────────┐
 │ 查询持仓 → 计算卖出数量（全仓 / 减仓比例）   │
-│ 展示计划 → 人工确认（--force 跳过）           │
+│ 展示计划 → 人工确认（--auto-approve 跳过）    │
 │ 提交卖出委托                                 │
 └──────────────────────────────────────────────┘
     ↓
 记录到 submitted_orders.json（防重复）
 ```
+
+## Docker
+
+```bash
+# 拉取最新镜像
+docker pull ghcr.io/bowencool/trading-scripts:latest
+
+# 自动交易（人工确认模式）
+docker run --rm \
+  -e CLIENT_ID=your-client-id \
+  -e DB_PATH=/app/data/stock_analysis.db \
+  -v $(pwd)/data:/app/data \
+  -v ~/.longbridge:/root/.longbridge \
+  ghcr.io/bowencool/trading-scripts trade
+
+# 自动交易（全自动模式）
+docker run --rm \
+  -e CLIENT_ID=your-client-id \
+  -e DB_PATH=/app/data/stock_analysis.db \
+  -v $(pwd)/data:/app/data \
+  -v ~/.longbridge:/root/.longbridge \
+  ghcr.io/bowencool/trading-scripts trade --auto-approve
+
+# 试运行（不连接交易所）
+docker run --rm \
+  -e DB_PATH=/app/data/stock_analysis.db \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/bowencool/trading-scripts trade --dry-run
+
+# 查看报告
+docker run --rm \
+  -e DB_PATH=/app/data/stock_analysis.db \
+  -v $(pwd)/data:/app/data \
+  -v ~/.longbridge:/root/.longbridge \
+  ghcr.io/bowencool/trading-scripts reports
+```
+
+**挂载说明**
+
+| 容器路径 | 说明 |
+|----------|------|
+| `/app/data` | `stock_analysis.db`（只读）+ `submitted_orders.json`（读写） |
+| `/root/.longbridge` | OAuth token 缓存（首次授权后可复用） |
+
