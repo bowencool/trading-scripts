@@ -74,7 +74,8 @@ docker pull ghcr.io/bowencool/trading-scripts:latest
 # 自动交易（人工确认模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
-  -e DB_PATH=/app/data/stock_analysis.db \
+  -e DB_PATH=/app/db/stock_analysis.db \
+  -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v $(pwd)/data:/app/data \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade
@@ -82,20 +83,23 @@ docker run --rm \
 # 自动交易（全自动模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
-  -e DB_PATH=/app/data/stock_analysis.db \
+  -e DB_PATH=/app/db/stock_analysis.db \
+  -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v $(pwd)/data:/app/data \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --auto-approve
 
 # 试运行（不连接交易所）
 docker run --rm \
-  -e DB_PATH=/app/data/stock_analysis.db \
+  -e DB_PATH=/app/db/stock_analysis.db \
+  -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v $(pwd)/data:/app/data \
   ghcr.io/bowencool/trading-scripts trade --dry-run
 
 # 查看报告
 docker run --rm \
-  -e DB_PATH=/app/data/stock_analysis.db \
+  -e DB_PATH=/app/db/stock_analysis.db \
+  -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v $(pwd)/data:/app/data \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts reports
@@ -103,9 +107,12 @@ docker run --rm \
 
 **挂载说明**
 
-| 容器路径            | 说明                                                         |
-| ------------------- | ------------------------------------------------------------ |
-| `/app/data`         | `stock_analysis.db`（只读）+ `submitted_orders.json`（读写） |
-| `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                         |
+| 容器路径            | 说明                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `/app/db/`          | 包含 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis)项目的 `stock_analysis.db`（只读） |
+| `/app/data`         | 包含此项目的数据文件                                                                                             |
+| `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                                                                             |
+
+> **提示**：`DB_PATH` 与数据目录无关，指向你实际的 `stock_analysis.db` 即可。示例中用 `/app/db/` 只是约定，实际可挂载到任意路径。
 
 > **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
