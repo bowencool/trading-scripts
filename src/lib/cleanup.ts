@@ -1,6 +1,12 @@
-import { OrderStatus, type TradeContext } from "longbridge";
+import { type OrderDetail, OrderStatus, type TradeContext } from "longbridge";
 import { loadTrackedOrders, removeOrder } from "./tracker.js";
 import { isTerminal, orderStatusName } from "./utils.js";
+
+const API_DELAY_MS = 200;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 /**
  * Check tracked buy/sell orders via API and remove any that have reached a
@@ -13,19 +19,19 @@ export async function pruneStaleBuyOrders(tradeCtx: TradeContext): Promise<void>
   const buySellOrders = orders.filter((o) => o.role === "buy" || o.role === "sell");
 
   let pruned = 0;
-  const results = await Promise.allSettled(
-    buySellOrders.map(async (order) => {
-      const detail = await tradeCtx.orderDetail(order.orderId);
-      return { order, detail };
-    }),
-  );
 
-  for (const result of results) {
-    if (result.status === "rejected") {
-      console.warn(`[WARN] 查询订单状态失败: ${result.reason}`);
+  for (let i = 0; i < buySellOrders.length; i++) {
+    const order = buySellOrders[i];
+    let detail: OrderDetail | undefined;
+    try {
+      detail = await tradeCtx.orderDetail(order.orderId);
+    } catch (err) {
+      console.warn(`[WARN] 查询订单状态失败: ${err}`);
       continue;
     }
-    const { order, detail } = result.value;
+    if (i < buySellOrders.length - 1) {
+      await delay(API_DELAY_MS);
+    }
     if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
       const statusName =
         detail.status === OrderStatus.Canceled
@@ -78,21 +84,20 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     }
   }
 
-  // Parallel-fetch linked buy order statuses
-  const buyDetails = await Promise.allSettled(
-    linked.map(async (slTp) => ({
-      slTp,
+  // Sequential-fetch linked buy order statuses with delay to avoid rate limiting
+  for (let i = 0; i < linked.length; i++) {
+    const slTp = linked[i];
+    let buyDetail: OrderDetail | undefined;
+    try {
       // biome-ignore lint/style/noNonNullAssertion: filtered above
-      buyDetail: await tradeCtx.orderDetail(slTp.linkedBuyOrderId!),
-    })),
-  );
-
-  for (const result of buyDetails) {
-    if (result.status === "rejected") {
-      console.error(`[WARN] 查询关联买单状态失败: ${result.reason}`);
+      buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId!);
+    } catch (err) {
+      console.error(`[WARN] 查询关联买单状态失败: ${err}`);
       continue;
     }
-    const { slTp, buyDetail } = result.value;
+    if (i < linked.length - 1) {
+      await delay(API_DELAY_MS);
+    }
     if (
       buyDetail.status === OrderStatus.Canceled ||
       buyDetail.status === OrderStatus.Expired ||
@@ -153,10 +158,9 @@ export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
     processed.add(pairKey);
 
     try {
-      const [detail, pairDetail] = await Promise.all([
-        tradeCtx.orderDetail(order.orderId),
-        tradeCtx.orderDetail(pairId),
-      ]);
+      const detail = await tradeCtx.orderDetail(order.orderId);
+      await delay(API_DELAY_MS);
+      const pairDetail = await tradeCtx.orderDetail(pairId);
 
       // If both already in terminal state, clean up tracking
       if (isTerminal(detail.status) && isTerminal(pairDetail.status)) {

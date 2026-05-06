@@ -62,7 +62,7 @@ function printDryRunSignals(
       if (record.stop_loss) console.log(`      止损: ${record.stop_loss} (MIT 市价触单)`);
       if (record.take_profit) console.log(`      止盈: ${record.take_profit} (LIT 限价触单)`);
       console.log(`      仓位比例: ${positionPct}%（需连接 Longbridge 才能计算具体数量）`);
-    } else if (side === "卖出") {
+    } else if (side === "卖出" || side === "减仓") {
       console.log(`\n   📋 交易计划:`);
       console.log(`      方向: ${side} | 模式: ${side === "减仓" ? "部分减仓" : "全部清仓"}`);
     } else {
