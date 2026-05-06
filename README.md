@@ -59,11 +59,17 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并填入你的配置。
+复制 `.env.example` 为 `.env` 并根据其内置说明填写你的配置。
 
-首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+### 3. 交易
 
-> **提示**：可以使用模拟账户完成授权和测试，无需真实资金。
+``` bash
+pnpm trade # 人工确认模式
+pnpm trade --auto-approve # 全自动模式
+pnpm trade --dry-run # 试运行（不连接交易所）
+```
+
+首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
 ## Docker
 
