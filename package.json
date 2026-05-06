@@ -4,16 +4,31 @@
   "description": "Simple TypeScript trading scripts for local and server use",
   "private": true,
   "scripts": {
-    "start": "source .env && tsx src/index.ts",
-    "dev": "source .env && tsx watch src/index.ts"
+    "reports": "tsx --env-file=.env src/reports.ts",
+    "trade": "tsx --env-file=.env src/trade.ts",
+    "trade:auto": "tsx --env-file=.env src/trade.ts --auto-approve",
+
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,js,json}": "biome check --write --no-errors-on-unmatched"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.14",
     "@types/node": "^22.19.17",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   },
   "engines": {
     "node": "22.x"
   },
-  "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8"
+  "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
+  "dependencies": {
+    "longbridge": "^4.0.5"
+  }
 }

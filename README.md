@@ -1,51 +1,66 @@
 # trading-scripts
 
-一个非常简单的 TypeScript 脚本，运行在本地和服务器，**不需要安装任何框架**。
+基于 [Longbridge OpenAPI](https://open.longbridge.com) 的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
 
 ## 功能
 
-- 从 Binance 公开 API 拉取 K 线数据（无需 API key）
-- 计算简单移动平均线（SMA7 / SMA25）
-- 输出多空信号
+- 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
+- 自动过滤 A 股，仅处理港股和美股标的
+- 买入信号：提交限价单 (LO)，10 秒内未成交自动降级为市价单 (MO)
+- 卖出信号：支持全仓卖出和按比例减仓
+- 等待买单成交后再提交止损 (MIT) / 止盈 (LIT)，防止幽灵订单
+- WebSocket 实时监控 OCO 对，一方成交立即撤销另一方
+- 孤儿订单清理，自动撤销无父订单的止损/止盈
+- 过期订单记录自动清理（保留最近 2 周）
+- 订单追踪，防止重复下单
+- 支持人工确认和全自动 (`--auto-approve`) 两种模式
 
 ## 快速开始
 
+### 1. 注册 OAuth Client
+
 ```bash
-# 安装依赖（仅 TypeScript 工具链，无框架）
-pnpm install
-
-# 运行示例脚本
-pnpm start
-
-# 开发模式（文件改动自动重新运行）
-pnpm dev
+curl -X POST https://openapi.longbridge.com/oauth2/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "Trading Scripts",
+    "redirect_uris": ["http://localhost:60355/callback"],
+    "grant_types": ["authorization_code", "refresh_token"]
+  }'
 ```
 
-### 示例输出
+保存返回的 `client_id`。
+
+### 2. 配置环境变量
+
+复制 `.env.example` 为 `.env` 并填入你的配置。
+
+首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+
+> **提示**：可以使用模拟账户完成授权和测试，无需真实资金。
+
+## 交易流程
 
 ```
-Fetching 30 1d klines for BTCUSDT…
-Date        : 2026-05-03
-Close price : 96800.00 USDT
-SMA  7      : 95200.00 USDT
-SMA 25      : 92100.00 USDT
-Signal      : 📈 Bullish (SMA7 > SMA25)
+读取分析报告 → 过滤 A 股 → 分离买入/卖出信号 → 转换 Symbol
+    ↓
+清理过期订单记录（已取消/拒绝/过期）
+    ↓
+清理孤儿订单 + OCO 残留对
+    ↓
+注册已有 OCO 对到 WebSocket 监听
+    ↓
+┌─── 买入信号 ────────────────────────────────┐
+│ 查询行情 → 检查价格阈值 → 计算数量（尊重手数） │
+│ 展示计划 → 人工确认（--force 跳过）           │
+│ 提交 LO → 等待成交（10s 超时降级为 MO）       │
+│ 成交后 → 提交 MIT 止损 + LIT 止盈 → OCO 绑定 │
+└──────────────────────────────────────────────┘
+┌─── 卖出信号 ────────────────────────────────┐
+│ 查询持仓 → 计算卖出数量（全仓 / 减仓比例）   │
+│ 展示计划 → 人工确认（--force 跳过）           │
+│ 提交卖出委托                                 │
+└──────────────────────────────────────────────┘
+    ↓
+记录到 submitted_orders.json（防重复）
 ```
-
-## 项目结构
-
-```
-trading-scripts/
-├── src/
-│   └── index.ts   # 主脚本入口
-├── package.json
-└── tsconfig.json
-```
-
-## 依赖说明
-
-| 包 | 用途 |
-|---|---|
-| `tsx` | 直接运行 TypeScript，无需编译步骤 |
-| `typescript` | 类型检查 |
-| `@types/node` | Node.js 内置模块类型定义 |

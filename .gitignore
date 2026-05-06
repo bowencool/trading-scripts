@@ -98,6 +98,9 @@ dist
 # vuepress v2.x temp directory
 .temp
 
+# Local sync scripts
+scripts/sync-db.sh
+
 # Sveltekit cache directory
 .svelte-kit/
 
@@ -148,3 +151,6 @@ vite.config.ts.timestamp-*
 stock_analysis.db
 *.db-shm
 *.db-wal
+
+# Order tracking
+submitted_orders.json
