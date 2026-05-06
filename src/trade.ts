@@ -6,11 +6,11 @@ import {
   pruneExpiredOrders,
   pruneStaleBuyOrders,
 } from "./lib/cleanup.js";
-import { fetchBuySignals, fetchRecentReports, fetchSellSignals } from "./lib/db.js";
+import { queryAll } from "./lib/db.js";
 import { executeSellSignal, executeSignal } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
-import { getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
+import { drainWrites, getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
 import type { TradeSignal } from "./lib/types.js";
 
 async function main(): Promise<void> {
@@ -18,9 +18,6 @@ async function main(): Promise<void> {
   const isAutoApprove = args.includes("--auto-approve");
 
   const dbPath = process.env.DB_PATH || "./data/stock_analysis.db";
-
-  const reports = fetchRecentReports(dbPath);
-  console.log(`\n📊 最近 12 小时分析报告: ${reports.length} 条`);
 
   const clientId = process.env.CLIENT_ID;
   if (!clientId) {
@@ -57,11 +54,18 @@ async function main(): Promise<void> {
     console.log(`🗑️  已清理 ${pruned} 条超过 2 周的过期订单记录`);
   }
 
+  // Query DB once after cleanup (free'd signal IDs are now available)
   const submittedIds = getSubmittedRecordIds();
-  const records = fetchBuySignals(dbPath, [...submittedIds]);
+  const {
+    buySignals,
+    sellSignals: sellRecords,
+    recentReports,
+  } = queryAll(dbPath, [...submittedIds]);
+
+  console.log(`\n📊 最近 12 小时分析报告: ${recentReports.length} 条`);
 
   const signals: TradeSignal[] = [];
-  for (const record of records) {
+  for (const record of buySignals) {
     const symbol = toLongbridgeSymbol(record.code);
     if (!symbol) {
       console.warn(`[SKIP] 无法映射代码 "${record.code}" 到 Longbridge symbol`);
@@ -79,7 +83,6 @@ async function main(): Promise<void> {
   }
 
   // Sell signals: "卖出" = full exit, "减仓" = partial exit
-  const sellRecords = fetchSellSignals(dbPath, [...submittedIds]);
   for (const record of sellRecords) {
     const symbol = toLongbridgeSymbol(record.code);
     if (!symbol) {
@@ -142,6 +145,9 @@ async function main(): Promise<void> {
   // Keep the process alive briefly to allow any final OCO pushes to be processed
   await new Promise((r) => setTimeout(r, 2000));
   await orderWatcher.stop();
+
+  // Flush any pending order tracking writes before exit
+  await drainWrites();
 
   // Longbridge SDK holds open gRPC connections that keep the event loop alive.
   // Force exit since this is a CLI script, not a long-running server.

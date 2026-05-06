@@ -78,6 +78,34 @@ function getCurrency(symbol: string): string {
   return "HKD";
 }
 
+const MAX_SUBMIT_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+
+async function submitWithRetry(
+  submitFn: () => Promise<{ orderId: string }>,
+  label: string,
+  symbol: string,
+): Promise<string | undefined> {
+  for (let attempt = 0; attempt <= MAX_SUBMIT_RETRIES; attempt++) {
+    try {
+      const resp = await submitFn();
+      return resp.orderId;
+    } catch (err) {
+      if (attempt < MAX_SUBMIT_RETRIES) {
+        console.warn(
+          `[RETRY] ${label} ${symbol} 第 ${attempt + 1} 次提交失败: ${err}，${RETRY_DELAY_MS}ms 后重试...`,
+        );
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      } else {
+        console.error(
+          `[ERR] ${label} ${symbol} 提交失败（已重试 ${MAX_SUBMIT_RETRIES} 次）: ${err}`,
+        );
+      }
+    }
+  }
+  return undefined;
+}
+
 export async function executeSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
@@ -265,15 +293,24 @@ export async function executeSignal(
 
       const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
       if (moEvent.status !== OrderStatus.Filled) {
-        console.log(
-          `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
-        );
+        const moDetail = await tradeCtx.orderDetail(filledOrderId);
+        const moFilledQty = Number(moDetail.executedQuantity.toString());
+        totalFilledQty = buyFilledQty + moFilledQty;
         removeOrder(filledOrderId);
-        return null;
+        if (totalFilledQty <= 0) {
+          console.log(
+            `[SKIP] 市价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
+          );
+          return null;
+        }
+        console.log(
+          `[WARN] 市价单 ${filledOrderId} 未全部成交 (状态: ${orderStatusName(moEvent.status)})，已成交部分 ${moFilledQty} 股，总成交: ${totalFilledQty} 股，仍设置止损/止盈`,
+        );
+      } else {
+        const moDetail = await tradeCtx.orderDetail(filledOrderId);
+        totalFilledQty = buyFilledQty + Number(moDetail.executedQuantity.toString());
+        console.log(`[OK] 市价单已成交，总成交: ${totalFilledQty} 股`);
       }
-      const moDetail = await tradeCtx.orderDetail(filledOrderId);
-      totalFilledQty = buyFilledQty + Number(moDetail.executedQuantity.toString());
-      console.log(`[OK] 市价单已成交，总成交: ${totalFilledQty} 股`);
     }
   } else {
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
@@ -284,19 +321,22 @@ export async function executeSignal(
 
   // Submit stop-loss order (MIT) — only after buy order is confirmed filled
   if (signal.stopLoss) {
-    try {
-      const slResp = await tradeCtx.submitOrder({
-        symbol: signal.symbol,
-        orderType: OrderType.MIT,
-        side: OrderSide.Sell,
-        timeInForce: TimeInForceType.GoodTilCanceled,
-        submittedQuantity: new Decimal(String(totalFilledQty)),
-        triggerPrice: new Decimal(String(signal.stopLoss)),
-        remark: `auto-trade:sl:${signal.record.id}`,
-      });
-      stopLossOrderId = slResp.orderId;
+    stopLossOrderId = await submitWithRetry(
+      () =>
+        tradeCtx.submitOrder({
+          symbol: signal.symbol,
+          orderType: OrderType.MIT,
+          side: OrderSide.Sell,
+          timeInForce: TimeInForceType.GoodTilCanceled,
+          submittedQuantity: new Decimal(String(totalFilledQty)),
+          triggerPrice: new Decimal(String(signal.stopLoss)),
+          remark: `auto-trade:sl:${signal.record.id}`,
+        }),
+      "止损单",
+      signal.symbol,
+    );
+    if (stopLossOrderId) {
       console.log(`[OK] 止损单已提交: ${stopLossOrderId} (触发价: ${signal.stopLoss})`);
-
       trackOrder({
         orderId: stopLossOrderId,
         symbol: signal.symbol,
@@ -310,27 +350,28 @@ export async function executeSignal(
         role: "stop_loss",
         linkedBuyOrderId: filledOrderId,
       });
-    } catch (err) {
-      console.error(`[WARN] 止损单提交失败: ${err}`);
     }
   }
 
   // Submit take-profit order (LIT)
   if (signal.takeProfit) {
-    try {
-      const tpResp = await tradeCtx.submitOrder({
-        symbol: signal.symbol,
-        orderType: OrderType.LIT,
-        side: OrderSide.Sell,
-        timeInForce: TimeInForceType.GoodTilCanceled,
-        submittedQuantity: new Decimal(String(totalFilledQty)),
-        triggerPrice: new Decimal(String(signal.takeProfit)),
-        submittedPrice: new Decimal(String(signal.takeProfit)),
-        remark: `auto-trade:tp:${signal.record.id}`,
-      });
-      takeProfitOrderId = tpResp.orderId;
+    takeProfitOrderId = await submitWithRetry(
+      () =>
+        tradeCtx.submitOrder({
+          symbol: signal.symbol,
+          orderType: OrderType.LIT,
+          side: OrderSide.Sell,
+          timeInForce: TimeInForceType.GoodTilCanceled,
+          submittedQuantity: new Decimal(String(totalFilledQty)),
+          triggerPrice: new Decimal(String(signal.takeProfit)),
+          submittedPrice: new Decimal(String(signal.takeProfit)),
+          remark: `auto-trade:tp:${signal.record.id}`,
+        }),
+      "止盈单",
+      signal.symbol,
+    );
+    if (takeProfitOrderId) {
       console.log(`[OK] 止盈单已提交: ${takeProfitOrderId} (触发价: ${signal.takeProfit})`);
-
       trackOrder({
         orderId: takeProfitOrderId,
         symbol: signal.symbol,
@@ -344,8 +385,6 @@ export async function executeSignal(
         role: "take_profit",
         linkedBuyOrderId: filledOrderId,
       });
-    } catch (err) {
-      console.error(`[WARN] 止盈单提交失败: ${err}`);
     }
   }
 
@@ -409,10 +448,36 @@ export async function executeSellSignal(
   }
 
   // 3. Cancel existing SL/TP orders for this symbol
+  // Full exit (卖出): cancel all SL/TP for the symbol since we're closing the entire position
+  // Partial exit (减仓): only cancel SL/TP orders linked to buy orders with matching signalRecordId,
+  //   since we're only reducing the position and other SL/TP should remain active
   const trackedOrders = loadTrackedOrders();
-  const slTpOrders = trackedOrders.filter(
-    (o) => o.symbol === signal.symbol && (o.role === "stop_loss" || o.role === "take_profit"),
-  );
+  let slTpOrders: typeof trackedOrders;
+  if (isPartial) {
+    // Only cancel SL/TP whose linked buy order was submitted for this signal
+    const buyOrderIds = new Set(
+      trackedOrders
+        .filter(
+          (o) =>
+            o.symbol === signal.symbol && o.role === "buy" && o.signalRecordId === signal.record.id,
+        )
+        .map((o) => o.orderId),
+    );
+    slTpOrders = trackedOrders.filter(
+      (o) =>
+        o.symbol === signal.symbol &&
+        (o.role === "stop_loss" || o.role === "take_profit") &&
+        o.linkedBuyOrderId &&
+        buyOrderIds.has(o.linkedBuyOrderId),
+    );
+    if (slTpOrders.length === 0) {
+      console.log(`[INFO] 减仓模式: 未找到关联的止损/止盈单，现有止损/止盈将继续保持`);
+    }
+  } else {
+    slTpOrders = trackedOrders.filter(
+      (o) => o.symbol === signal.symbol && (o.role === "stop_loss" || o.role === "take_profit"),
+    );
+  }
 
   for (const slTp of slTpOrders) {
     try {
@@ -422,6 +487,11 @@ export async function executeSellSignal(
     } catch (err) {
       console.error(`[WARN] 取消 ${slTp.role} 订单 ${slTp.orderId} 失败: ${err}`);
     }
+  }
+
+  // Wait briefly for exchange to confirm cancellations before submitting new sell order
+  if (slTpOrders.length > 0) {
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   // 4. Get current price for reference
@@ -509,8 +579,9 @@ export async function executeSellSignal(
         console.log(
           `[WARN] 限价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})`,
         );
+        removeOrder(sellOrderId);
+        return null;
       }
-      removeOrder(sellOrderId);
     }
   } else {
     // Market orders: wait briefly for confirmation
@@ -523,6 +594,7 @@ export async function executeSellSignal(
         `[WARN] 市价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})`,
       );
       removeOrder(sellOrderId);
+      return null;
     }
   }
 

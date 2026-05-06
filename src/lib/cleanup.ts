@@ -13,26 +13,33 @@ export async function pruneStaleBuyOrders(tradeCtx: TradeContext): Promise<void>
   const buySellOrders = orders.filter((o) => o.role === "buy" || o.role === "sell");
 
   let pruned = 0;
-  for (const order of buySellOrders) {
-    try {
+  const results = await Promise.allSettled(
+    buySellOrders.map(async (order) => {
       const detail = await tradeCtx.orderDetail(order.orderId);
-      if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
-        const statusName =
-          detail.status === OrderStatus.Canceled
-            ? "已撤单"
-            : detail.status === OrderStatus.Expired
-              ? "已过期"
-              : detail.status === OrderStatus.Rejected
-                ? "被拒绝"
-                : `状态${detail.status}`;
-        console.log(
-          `[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`,
-        );
-        removeOrder(order.orderId);
-        pruned++;
-      }
-    } catch (err) {
-      console.warn(`[WARN] 查询订单 ${order.orderId} 状态失败: ${err}`);
+      return { order, detail };
+    }),
+  );
+
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.warn(`[WARN] 查询订单状态失败: ${result.reason}`);
+      continue;
+    }
+    const { order, detail } = result.value;
+    if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
+      const statusName =
+        detail.status === OrderStatus.Canceled
+          ? "已撤单"
+          : detail.status === OrderStatus.Expired
+            ? "已过期"
+            : detail.status === OrderStatus.Rejected
+              ? "被拒绝"
+              : `状态${detail.status}`;
+      console.log(
+        `[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`,
+      );
+      removeOrder(order.orderId);
+      pruned++;
     }
   }
 
@@ -49,26 +56,49 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
   const slTpOrders = orders.filter((o) => o.role === "stop_loss" || o.role === "take_profit");
   const buyOrderIds = new Set(orders.filter((o) => o.role === "buy").map((o) => o.orderId));
 
+  // Partition: orphaned (no linked buy) vs linked (need to check buy status)
+  const orphaned = slTpOrders.filter(
+    (o) => !o.linkedBuyOrderId || !buyOrderIds.has(o.linkedBuyOrderId),
+  );
+  const linked = slTpOrders.filter(
+    (o) => o.linkedBuyOrderId && buyOrderIds.has(o.linkedBuyOrderId),
+  );
+
   let cleaned = 0;
-  for (const slTp of slTpOrders) {
-    if (!slTp.linkedBuyOrderId || !buyOrderIds.has(slTp.linkedBuyOrderId)) {
-      try {
-        await tradeCtx.cancelOrder(slTp.orderId);
-        console.log(`[CANCEL] 已取消孤立订单 ${slTp.orderId} (${slTp.role}, ${slTp.symbol})`);
-        removeOrder(slTp.orderId);
-        cleaned++;
-      } catch (err) {
-        console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
-      }
+
+  // Cancel orphaned orders directly
+  for (const slTp of orphaned) {
+    try {
+      await tradeCtx.cancelOrder(slTp.orderId);
+      console.log(`[CANCEL] 已取消孤立订单 ${slTp.orderId} (${slTp.role}, ${slTp.symbol})`);
+      removeOrder(slTp.orderId);
+      cleaned++;
+    } catch (err) {
+      console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
+    }
+  }
+
+  // Parallel-fetch linked buy order statuses
+  const buyDetails = await Promise.allSettled(
+    linked.map(async (slTp) => ({
+      slTp,
+      // biome-ignore lint/style/noNonNullAssertion: filtered above
+      buyDetail: await tradeCtx.orderDetail(slTp.linkedBuyOrderId!),
+    })),
+  );
+
+  for (const result of buyDetails) {
+    if (result.status === "rejected") {
+      console.error(`[WARN] 查询关联买单状态失败: ${result.reason}`);
       continue;
     }
-    try {
-      const buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId);
-      if (
-        buyDetail.status === OrderStatus.Canceled ||
-        buyDetail.status === OrderStatus.Expired ||
-        buyDetail.status === OrderStatus.Rejected
-      ) {
+    const { slTp, buyDetail } = result.value;
+    if (
+      buyDetail.status === OrderStatus.Canceled ||
+      buyDetail.status === OrderStatus.Expired ||
+      buyDetail.status === OrderStatus.Rejected
+    ) {
+      try {
         await tradeCtx.cancelOrder(slTp.orderId);
         const statusName =
           buyDetail.status === OrderStatus.Canceled
@@ -81,11 +111,12 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
         );
         removeOrder(slTp.orderId);
         cleaned++;
+      } catch (err) {
+        console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
       }
-    } catch (err) {
-      console.error(`[WARN] 查询买单 ${slTp.linkedBuyOrderId} 失败: ${err}`);
     }
   }
+
   if (cleaned > 0) {
     console.log(`✅ 清理完成，共取消 ${cleaned} 个孤儿订单`);
   } else {

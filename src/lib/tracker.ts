@@ -30,10 +30,19 @@ export function removeOrder(orderId: string): void {
 }
 
 function enqueueWrite(mutator: (orders: TrackedOrder[]) => TrackedOrder[]): void {
-  writeLock = writeLock.then(() => {
-    const orders = loadTrackedOrders();
-    saveOrders(mutator(orders));
-  });
+  writeLock = writeLock
+    .then(() => {
+      const orders = loadTrackedOrders();
+      saveOrders(mutator(orders));
+    })
+    .catch((err) => {
+      console.error(`[TRACKER] Failed to write orders: ${err}`);
+    });
+}
+
+/** Wait for all pending writes to flush. Call before process.exit(). */
+export async function drainWrites(): Promise<void> {
+  await writeLock;
 }
 
 function saveOrders(orders: TrackedOrder[]): void {
