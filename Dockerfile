@@ -12,7 +12,7 @@ RUN pnpm install --frozen-lockfile
 COPY src/ src/
 COPY tsconfig.json ./
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && touch /app/.env
 
 ENTRYPOINT ["pnpm"]
 CMD ["trade"]
