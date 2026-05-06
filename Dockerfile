@@ -17,5 +17,5 @@ COPY tsconfig.json ./
 
 RUN mkdir -p /app/data && touch /app/.env
 
-ENTRYPOINT ["pnpm"]
+ENTRYPOINT ["pnpm", "--silent"]
 CMD ["trade"]
