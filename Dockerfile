@@ -1,5 +1,7 @@
 FROM ubuntu:noble
 
+ARG DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates && \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
@@ -9,13 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+ENV DB_PATH=/app/db/stock_analysis.db
+
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile && pnpm store prune
 
 COPY src/ src/
 COPY tsconfig.json ./
 
-RUN mkdir -p /app/data && touch /app/.env
+RUN mkdir -p /app/db && touch /app/.env
 
 ENTRYPOINT ["pnpm", "--silent"]
 CMD ["trade"]

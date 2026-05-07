@@ -91,7 +91,6 @@ docker pull ghcr.io/bowencool/trading-scripts:latest
 # 自动交易（人工确认模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
-  -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade
@@ -99,7 +98,6 @@ docker run --rm \
 # 自动交易（全自动模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
-  -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --auto-approve
@@ -107,7 +105,6 @@ docker run --rm \
 # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
-  -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --dry-run
@@ -118,10 +115,10 @@ docker run --rm \
 
 | 容器路径            | 说明                                                                                                             |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `/app/db/`          | 包含 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis)项目的 `stock_analysis.db`（只读） |
+| `/app/db/stock_analysis.db` | 容器内固定数据库路径；将宿主机上的 `stock_analysis.db` 只读挂载到这里 |
 | `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                                                                             |
 
-> **提示**：`DB_PATH` 与数据目录无关，指向你实际的 `stock_analysis.db` 即可。示例中用 `/app/db/` 只是约定，实际可挂载到任意路径。
+> **提示**：Docker 镜像内已固定 `DB_PATH=/app/db/stock_analysis.db`，不需要额外传 `DB_PATH` 环境变量；如需更换数据库文件，请调整宿主机挂载源路径，容器目标路径保持不变。
 
 > **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
 
