@@ -53,22 +53,6 @@ take_profit (Float)
 created_at (DateTime, default=datetime.now, index)
 记录创建时间（保存时写入当前时间），按此字段可做时间范围查询、分页和排序。
 
-## 信号筛选架构（db.ts）
+## 注意事项
 
-该表为只读，不加字段。**SQL 只负责拉取最近 4 小时的全量数据，所有筛选逻辑在内存中完成。**
-
-### 查询流程
-
-1. `fetchRaw(dbPath, 4)` — 从 DB 拉取最近 4 小时全部 `analysis_history` 记录（按 `created_at DESC`）
-2. `deduplicate(raw)` — 去重 + 排除 A 股代码 + 取每只股票最新一条（`recentReports`）
-3. `deduplicate(raw, excludeIds)` — 同上，额外排除已提交订单的 `signalRecordId`（`filtered`）
-4. `filterBuySignals(filtered)` — `operation_advice IN ('买入','加仓') AND ideal_buy IS NOT NULL`
-5. `filterSellSignals(filtered)` — `operation_advice IN ('卖出','减仓') AND take_profit IS NOT NULL`
-
-### 可用工具函数（db.ts 导出）
-
-- `deduplicate(records, excludeIds?)` — A 股过滤 + 按 code 去重取最新
-- `filterBuySignals(records)` / `filterSellSignals(records)` — 买卖信号过滤
-- `computeRiskReward(record)` — 风险收益比 `(take_profit - ideal_buy) / (ideal_buy - stop_loss)`，不可计算时返回 `null`
-- `queryAll(dbPath, excludeIds)` — 完整的查询 + 筛选 pipeline
-- `fetchRecentReports(dbPath)` — 只取去重后的最近报告
+- 代码中调用 API 有时候是顺序调用，是因为 API 会限制调用频率，所以不用优化
