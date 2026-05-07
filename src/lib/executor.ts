@@ -79,6 +79,54 @@ function getCurrency(symbol: string): string | null {
   return null;
 }
 
+/**
+ * Get the best available price for a symbol.
+ * For buy side: prefer ask1 (卖一价) → pre/post/overnight → lastDone.
+ * For sell side: prefer bid1 (买一价) → pre/post/overnight → lastDone.
+ */
+async function getEffectivePrice(
+  quoteCtx: QuoteContext,
+  symbol: string,
+  side: "buy" | "sell",
+): Promise<{ price: number; source: string }> {
+  // 1. Try order book depth (ask1 for buy, bid1 for sell)
+  try {
+    const depth = await quoteCtx.depth(symbol);
+    const entries = side === "buy" ? depth.asks : depth.bids;
+    const first = entries[0];
+    if (first?.price) {
+      const depthPrice = Number(first.price.toString());
+      if (depthPrice > 0) {
+        return { price: depthPrice, source: side === "buy" ? "卖一" : "买一" };
+      }
+    }
+  } catch {
+    // depth API may not be available for all symbols
+  }
+
+  // 2. Try pre/post/overnight quote
+  const quotes = await quoteCtx.quote([symbol]);
+  if (quotes.length > 0) {
+    const q = quotes[0];
+    for (const [key, label] of [
+      ["preMarketQuote", "盘前"],
+      ["postMarketQuote", "盘后"],
+      ["overnightQuote", "夜盘"],
+    ] as const) {
+      const pq = q[key];
+      if (pq) {
+        const p = Number(pq.lastDone.toString());
+        if (p > 0) return { price: p, source: label };
+      }
+    }
+    // 3. Fallback to lastDone
+    const lastDone = Number(q.lastDone.toString());
+    if (lastDone > 0) return { price: lastDone, source: "lastDone" };
+  }
+
+  return { price: 0, source: "N/A" };
+}
+
 const MAX_SUBMIT_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 
@@ -129,31 +177,29 @@ export async function executeSignal(
     return null;
   }
 
-  // Get current price, lot size, and account balance in parallel
-  const [quotes, staticInfos, balances] = await Promise.all([
-    quoteCtx.quote([signal.symbol]),
+  // Get lot size and account balance in parallel
+  const [staticInfos, balances] = await Promise.all([
     quoteCtx.staticInfo([signal.symbol]),
     tradeCtx.accountBalance(currency),
   ]);
 
-  if (quotes.length === 0) {
-    console.log(`[SKIP] ${signal.symbol} - 无法获取行情`);
+  // Get effective price: ask1 (卖一价) → pre/post/overnight → lastDone
+  const { price: currentPriceNum, source: priceSource } = await getEffectivePrice(
+    quoteCtx,
+    signal.symbol,
+    "buy",
+  );
+  const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
+
+  if (currentPriceNum <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价`);
     return null;
   }
-  const currentPrice = quotes[0].lastDone;
-  const currentPriceNum = Number(currentPrice.toString());
-  const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
 
   // Check price threshold
   const threshold = Number((signal.targetPrice * (1 + priceThresholdPct / 100)).toFixed(2));
   if (currentPriceNum > threshold) {
     console.log(`[SKIP] ${signal.symbol} - 当前价 ${currentPriceNum} 超出阈值上限 ${threshold}`);
-    return null;
-  }
-
-  // Guard against zero/negative price (e.g. stock halt)
-  if (currentPriceNum <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价: ${currentPriceNum}`);
     return null;
   }
 
@@ -177,7 +223,7 @@ export async function executeSignal(
   // Print trade plan
   console.log(`\n📋 交易计划:`);
   console.log(
-    `   标的: ${signal.symbol} | 当前价: ${currentPriceNum} | 目标价: ${signal.targetPrice}`,
+    `   标的: ${signal.symbol} | 当前价: ${currentPriceNum}（${priceSource}） | 目标价: ${signal.targetPrice}`,
   );
   console.log(
     `   账户净资产: ${netAssets.toFixed(0)} ${currency} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
@@ -478,23 +524,16 @@ export async function executeSellSignal(
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // 4. Get current price for reference (with retry)
-  let currentPrice = 0;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const quotes = await quoteCtx.quote([signal.symbol]);
-    if (quotes.length > 0) {
-      currentPrice = Number(quotes[0].lastDone.toString());
-      break;
-    }
-    if (attempt === 0) {
-      console.warn(`[RETRY] ${signal.symbol} 获取行情失败，${RETRY_DELAY_MS}ms 后重试...`);
-      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-    }
-  }
+  // 4. Get effective price: bid1 (买一价) in depth → pre/post/overnight → lastDone
+  const { price: currentPrice, source: priceSource } = await getEffectivePrice(
+    quoteCtx,
+    signal.symbol,
+    "sell",
+  );
   const costPrice = Number(pos.costPrice.toString());
 
   if (currentPrice <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价: ${currentPrice}`);
+    console.log(`[SKIP] ${signal.symbol} - 无法获取有效现价`);
     return null;
   }
 
@@ -517,7 +556,9 @@ export async function executeSellSignal(
   const sellPrice = sellThreshold;
   const orderType = "限价单 (LO)";
   console.log(`\n📋 卖出计划:`);
-  console.log(`   标的: ${signal.symbol} | 当前价: ${currentPrice} | 成本价: ${costPrice}`);
+  console.log(
+    `   标的: ${signal.symbol} | 当前价: ${currentPrice}（${priceSource}） | 成本价: ${costPrice}`,
+  );
   console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
   if (hasSellPrice) {
     console.log(
