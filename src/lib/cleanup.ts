@@ -1,5 +1,5 @@
 import { OrderStatus, type TradeContext } from "longbridge";
-import { isAutoTradeRemark, parseRemarkRole } from "./symbols.js";
+import { isAutoTradeRemark, parseRemarkRecordId, parseRemarkRole } from "./symbols.js";
 
 const API_DELAY_MS = 200;
 const HISTORY_DAYS = 30;
@@ -28,6 +28,60 @@ function isTerminal(status: OrderStatus): boolean {
     status === OrderStatus.Rejected ||
     status === OrderStatus.Expired
   );
+}
+
+interface OcoOrderLike {
+  orderId: string;
+  status: OrderStatus;
+  remark?: string | null;
+}
+
+export function selectOcoOrdersToCancel<T extends OcoOrderLike>(orders: T[]): T[] {
+  const filledRolesByRecordId = new Map<string, Set<"stop_loss" | "take_profit">>();
+
+  for (const order of orders) {
+    const role = parseRemarkRole(order.remark ?? "");
+    const recordId = parseRemarkRecordId(order.remark ?? "");
+    if (!recordId || (role !== "stop_loss" && role !== "take_profit")) {
+      continue;
+    }
+
+    if (order.status !== OrderStatus.Filled) {
+      continue;
+    }
+
+    const filledRoles =
+      filledRolesByRecordId.get(recordId) ?? new Set<"stop_loss" | "take_profit">();
+    filledRoles.add(role);
+    filledRolesByRecordId.set(recordId, filledRoles);
+  }
+
+  const selected: T[] = [];
+  const seenOrderIds = new Set<string>();
+
+  for (const order of orders) {
+    const role = parseRemarkRole(order.remark ?? "");
+    const recordId = parseRemarkRecordId(order.remark ?? "");
+    if (!recordId || !role || isTerminal(order.status)) {
+      continue;
+    }
+
+    const filledRoles = filledRolesByRecordId.get(recordId);
+    if (!filledRoles) {
+      continue;
+    }
+
+    const oppositeRole =
+      role === "stop_loss" ? "take_profit" : role === "take_profit" ? "stop_loss" : null;
+    if (!oppositeRole || !filledRoles.has(oppositeRole) || seenOrderIds.has(order.orderId)) {
+      continue;
+    }
+
+    seenOrderIds.add(order.orderId);
+    selected.push(order);
+  }
+
+  return selected;
 }
 
 /**
@@ -117,34 +171,24 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
       }
     }
 
-    // 2. OCO cleanup: if SL filled but TP still active, cancel TP (and vice versa)
-    const filledSl = allSlOrders.filter((o) => o.status === OrderStatus.Filled);
-    const filledTp = allTpOrders.filter((o) => o.status === OrderStatus.Filled);
+    // 2. OCO cleanup: only cancel the opposite order from the same signal record
+    const ocoOrdersToCancel = selectOcoOrdersToCancel(orders);
 
-    if (filledSl.length > 0) {
-      for (const tp of activeTpOrders) {
-        try {
-          await tradeCtx.cancelOrder(tp.orderId);
-          console.log(`[OCO] 止损已成交，取消止盈 ${tp.orderId} (${symbol})`);
-          cleaned++;
-        } catch (err) {
-          console.error(`[WARN] 取消止盈 ${tp.orderId} 失败: ${err}`);
-        }
-        await delay(API_DELAY_MS);
+    for (const order of ocoOrdersToCancel) {
+      const role = parseRemarkRole(order.remark ?? "");
+      const recordId = parseRemarkRecordId(order.remark ?? "") ?? "?";
+      const label = role === "take_profit" ? "止盈" : role === "stop_loss" ? "止损" : "订单";
+      const cause = role === "take_profit" ? "止损已成交" : "止盈已成交";
+      try {
+        await tradeCtx.cancelOrder(order.orderId);
+        console.log(
+          `[OCO] ${cause}，取消${label} ${order.orderId} (${symbol}, record ${recordId})`,
+        );
+        cleaned++;
+      } catch (err) {
+        console.error(`[WARN] 取消${label} ${order.orderId} 失败: ${err}`);
       }
-    }
-
-    if (filledTp.length > 0) {
-      for (const sl of activeSlOrders) {
-        try {
-          await tradeCtx.cancelOrder(sl.orderId);
-          console.log(`[OCO] 止盈已成交，取消止损 ${sl.orderId} (${symbol})`);
-          cleaned++;
-        } catch (err) {
-          console.error(`[WARN] 取消止损 ${sl.orderId} 失败: ${err}`);
-        }
-        await delay(API_DELAY_MS);
-      }
+      await delay(API_DELAY_MS);
     }
   }
 

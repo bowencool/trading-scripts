@@ -68,3 +68,17 @@ export function parseRemarkRole(
   if (tag === "tp") return "take_profit";
   return null;
 }
+
+/**
+ * Parse analysis record id from remark string.
+ * "auto-trade:sl:123" → "123"
+ */
+export function parseRemarkRecordId(remark: string): string | null {
+  if (!remark.startsWith("auto-trade:")) return null;
+  const parts = remark.split(":");
+  const recordId = parts[2];
+  if (!recordId || !/^\d+$/.test(recordId)) {
+    return null;
+  }
+  return recordId;
+}

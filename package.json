@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "trade": "tsx --env-file=.env src/trade.ts",
+    "test": "node --import tsx --test src/lib/*.test.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",

@@ -439,17 +439,23 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
     const sellTimeout = 30_000;
     console.log(`[WAIT] 等待限价卖单 ${resp.orderId} 成交... (${sellTimeout / 1000} 秒超时)`);
     const sellEvent = await cfg.orderWatcher.waitForTerminal(resp.orderId, sellTimeout);
+    const filledDetail = await tradeCtx.orderDetail(resp.orderId);
+    const filledQty = Number(filledDetail.executedQuantity.toString());
+    const remainingQty = getRemainingPositionQuantity(holding.quantity, filledQty);
 
     if (sellEvent.status === OrderStatus.Filled) {
       console.log(`[OK] 限价卖单 ${resp.orderId} 已成交`);
     } else {
-      const filledDetail = await tradeCtx.orderDetail(resp.orderId);
-      const filledQty = Number(filledDetail.executedQuantity.toString());
       if (filledQty > 0) {
         console.log(`[WARN] 限价卖单 ${resp.orderId} 部分成交 ${filledQty}/${sellQty} 股`);
       } else {
         console.log(`[SKIP] 限价卖单 ${resp.orderId} 未成交，跳过`);
       }
+    }
+
+    if (cancelledOrderIds.length > 0 && remainingQty > 0) {
+      console.log(`[RECOVER] ${symbol} 剩余 ${remainingQty} 股，重挂 SL/TP`);
+      await rollbackSlTp(cfg, symbol, record, remainingQty);
     }
   } catch (err) {
     console.error(`[ERR] 卖出单提交失败: ${err}`);
@@ -709,14 +715,14 @@ async function getSlTpOrdersForSymbol(
   _symbol: string,
   plan: ActionPlan,
 ): Promise<ActiveOrder[]> {
-  // Use existing SL/TP orders from the plan if available
+  if (plan.ordersToCancel && plan.ordersToCancel.length > 0) {
+    return dedupeOrdersById(plan.ordersToCancel);
+  }
+
   const result: ActiveOrder[] = [];
   if (plan.existingSlOrder) result.push(plan.existingSlOrder);
   if (plan.existingTpOrder) result.push(plan.existingTpOrder);
-
-  // If plan doesn't have them, we need to find them from portfolio state
-  // But the plan should already have them populated by comparator
-  return result;
+  return dedupeOrdersById(result);
 }
 
 /**
@@ -742,6 +748,26 @@ async function rollbackSlTp(
     );
     console.error(`${"!".repeat(80)}\n`);
   }
+}
+
+function dedupeOrdersById(orders: ActiveOrder[]): ActiveOrder[] {
+  const seen = new Set<string>();
+  const result: ActiveOrder[] = [];
+
+  for (const order of orders) {
+    if (seen.has(order.orderId)) continue;
+    seen.add(order.orderId);
+    result.push(order);
+  }
+
+  return result;
+}
+
+export function getRemainingPositionQuantity(
+  holdingQuantity: number,
+  filledQuantity: number,
+): number {
+  return Math.max(0, holdingQuantity - filledQuantity);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

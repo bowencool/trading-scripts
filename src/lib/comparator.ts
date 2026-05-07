@@ -76,12 +76,22 @@ export function buildActionPlan(
     }
 
     const isPartial = (record.operation_advice ?? "").includes("减仓");
+    const slOrders = portfolio.activeOrders.filter(
+      (o) => o.symbol === symbol && o.role === "stop_loss",
+    );
+    const tpOrders = portfolio.activeOrders.filter(
+      (o) => o.symbol === symbol && o.role === "take_profit",
+    );
+    const ordersToCancel = [...slOrders, ...tpOrders];
     plans.push({
       action: isPartial ? "SELL_PARTIAL" : "SELL_FULL",
       symbol,
       record,
       holding,
+      existingSlOrder: slOrders[0],
+      existingTpOrder: tpOrders[0],
       sellPct: isPartial ? Number(process.env.SELL_PCT || "50") : undefined,
+      ordersToCancel: ordersToCancel.length > 0 ? ordersToCancel : undefined,
     });
     processedSymbols.add(symbol);
   }

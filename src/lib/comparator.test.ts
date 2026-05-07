@@ -1,0 +1,83 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildActionPlan } from "./comparator.js";
+import type { ActiveOrder, AnalysisRecord, PortfolioState } from "./types.js";
+
+function makeRecord(overrides: Partial<AnalysisRecord> = {}): AnalysisRecord {
+  return {
+    id: 1,
+    query_id: null,
+    code: "AAPL",
+    name: "Apple",
+    report_type: "agent",
+    sentiment_score: 80,
+    operation_advice: "卖出",
+    trend_prediction: "看空",
+    analysis_summary: null,
+    raw_result: null,
+    news_content: null,
+    context_snapshot: null,
+    ideal_buy: 100,
+    secondary_buy: null,
+    stop_loss: 95,
+    take_profit: 110,
+    created_at: "2026-05-08 09:00:00",
+    ...overrides,
+  };
+}
+
+function makeOrder(overrides: Partial<ActiveOrder> = {}): ActiveOrder {
+  return {
+    orderId: "ord-1",
+    symbol: "AAPL.US",
+    side: "Sell",
+    orderType: "MIT",
+    price: "0",
+    triggerPrice: "95",
+    quantity: "100",
+    status: "New",
+    role: "stop_loss",
+    remark: "auto-trade:sl:1",
+    ...overrides,
+  };
+}
+
+test("buildActionPlan includes existing SL/TP orders on sell actions", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map([
+      [
+        "AAPL.US",
+        {
+          symbol: "AAPL.US",
+          quantity: 100,
+          availableQuantity: 100,
+          costPrice: 98,
+        },
+      ],
+    ]),
+    activeOrders: [
+      makeOrder(),
+      makeOrder({
+        orderId: "ord-2",
+        orderType: "LIT",
+        price: "110",
+        triggerPrice: "110",
+        role: "take_profit",
+        remark: "auto-trade:tp:1",
+      }),
+    ],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(portfolio, [], [makeRecord({})], new Map());
+  assert.equal(plans.length, 1);
+
+  const [plan] = plans;
+  assert.equal(plan.action, "SELL_FULL");
+  assert.equal(plan.existingSlOrder?.orderId, "ord-1");
+  assert.equal(plan.existingTpOrder?.orderId, "ord-2");
+  assert.deepEqual(
+    plan.ordersToCancel?.map((order) => order.orderId),
+    ["ord-1", "ord-2"],
+  );
+});
