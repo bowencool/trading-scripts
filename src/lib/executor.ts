@@ -3,6 +3,7 @@ import {
   OrderSide,
   OrderStatus,
   OrderType,
+  OutsideRTH,
   type QuoteContext,
   TimeInForceType,
   type TradeContext,
@@ -211,6 +212,7 @@ export async function executeSignal(
     timeInForce: TimeInForceType.Day,
     submittedQuantity: new Decimal(String(qty)),
     submittedPrice: new Decimal(String(signal.targetPrice)),
+    outsideRth: OutsideRTH.AnyTime,
     remark: `auto-trade:buy:${signal.record.id}`,
   });
 
@@ -283,6 +285,7 @@ export async function executeSignal(
         side: OrderSide.Buy,
         timeInForce: TimeInForceType.Day,
         submittedQuantity: new Decimal(String(remainingQty)),
+        outsideRth: OutsideRTH.AnyTime,
         remark: `auto-trade:buy-retry:${signal.record.id}`,
       });
 
@@ -340,6 +343,7 @@ export async function executeSignal(
           timeInForce: TimeInForceType.GoodTilCanceled,
           submittedQuantity: new Decimal(String(totalFilledQty)),
           triggerPrice: new Decimal(String(signal.stopLoss)),
+          outsideRth: OutsideRTH.AnyTime,
           remark: `auto-trade:sl:${signal.record.id}`,
         }),
       "止损单",
@@ -375,6 +379,7 @@ export async function executeSignal(
           submittedQuantity: new Decimal(String(totalFilledQty)),
           triggerPrice: new Decimal(String(signal.takeProfit)),
           submittedPrice: new Decimal(String(signal.takeProfit)),
+          outsideRth: OutsideRTH.AnyTime,
           remark: `auto-trade:tp:${signal.record.id}`,
         }),
       "止盈单",
@@ -601,6 +606,7 @@ export async function executeSellSignal(
     timeInForce: TimeInForceType.Day,
     submittedQuantity: new Decimal(String(sellQty)),
     ...(hasSellPrice && { submittedPrice: new Decimal(String(sellPrice)) }),
+    outsideRth: OutsideRTH.AnyTime,
     remark,
   });
 
