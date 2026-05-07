@@ -4,7 +4,6 @@
   "description": "Simple TypeScript trading scripts for local and server use",
   "private": true,
   "scripts": {
-    "reports": "tsx --env-file=.env src/reports.ts",
     "trade": "tsx --env-file=.env src/trade.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

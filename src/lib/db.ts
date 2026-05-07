@@ -9,6 +9,10 @@ const A_SHARE_RE = /^[036]\d+$/;
 const BUY_ADVICE = new Set(["买入", "加仓"]);
 const SELL_ADVICE = new Set(["卖出", "减仓"]);
 
+function formatRecord(record: AnalysisRecord): string {
+  return `${record.created_at} #${record.id} [${record.code}] ${record.name ?? "未知"}`;
+}
+
 // ── Raw fetch ─────────────────────────────────────────────────────────────────
 
 /** Configurable time window (hours) for fetching records. Set via WINDOW_HOURS env var. */
@@ -29,30 +33,6 @@ function fetchRaw(dbPath: string): AnalysisRecord[] {
   } finally {
     db.close();
   }
-}
-
-// ── In-memory filtering ───────────────────────────────────────────────────────
-
-/** Keep only the latest record per code; exclude A-shares and submitted IDs. */
-export function deduplicate(
-  records: AnalysisRecord[],
-  excludeIds: Set<number> = new Set(),
-): AnalysisRecord[] {
-  const seen = new Map<string, AnalysisRecord>();
-  for (const r of records) {
-    if (excludeIds.has(r.id)) continue;
-    if (A_SHARE_RE.test(r.code)) continue;
-    if (!seen.has(r.code)) seen.set(r.code, r);
-  }
-  return [...seen.values()];
-}
-
-export function filterBuySignals(records: AnalysisRecord[]): AnalysisRecord[] {
-  return records.filter((r) => BUY_ADVICE.has(r.operation_advice ?? "") && r.ideal_buy != null);
-}
-
-export function filterSellSignals(records: AnalysisRecord[]): AnalysisRecord[] {
-  return records.filter((r) => SELL_ADVICE.has(r.operation_advice ?? "") && r.take_profit != null);
 }
 
 /**
@@ -82,16 +62,60 @@ export function queryAll(
   recentReports: AnalysisRecord[];
 } {
   const raw = fetchRaw(dbPath);
-  const recentReports = deduplicate(raw);
-  const filtered = deduplicate(raw, excludeRecordIds);
-  return {
-    buySignals: filterBuySignals(filtered),
-    sellSignals: filterSellSignals(filtered),
-    recentReports,
-  };
-}
+  const recentSeen = new Map<string, AnalysisRecord>();
+  const tradeSeen = new Map<string, AnalysisRecord>();
+  const buySignals: AnalysisRecord[] = [];
+  const sellSignals: AnalysisRecord[] = [];
 
-/** Convenience wrapper for callers that only need recent reports. */
-export function fetchRecentReports(dbPath: string): AnalysisRecord[] {
-  return deduplicate(fetchRaw(dbPath));
+  for (const record of raw) {
+    if (!A_SHARE_RE.test(record.code) && !recentSeen.has(record.code)) {
+      recentSeen.set(record.code, record);
+    }
+
+    if (excludeRecordIds.has(record.id)) {
+      console.log(`[跳过] ${formatRecord(record)} -> 已下单`);
+      continue;
+    }
+
+    if (A_SHARE_RE.test(record.code)) {
+      console.log(`[跳过] ${formatRecord(record)} -> 暂不支持 A 股交易`);
+      continue;
+    }
+
+    if (tradeSeen.has(record.code)) {
+      const kept = tradeSeen.get(record.code);
+      console.log(`[跳过] ${formatRecord(record)} -> 已被更新报告#${kept?.id}覆盖`);
+      continue;
+    }
+
+    tradeSeen.set(record.code, record);
+
+    const advice = record.operation_advice ?? "";
+
+    if (BUY_ADVICE.has(advice)) {
+      if (record.ideal_buy == null) {
+        console.log(`[跳过] ${formatRecord(record)} -> 买入/加仓但缺少 ideal_buy`);
+        continue;
+      }
+      buySignals.push(record);
+      continue;
+    }
+
+    if (SELL_ADVICE.has(advice)) {
+      if (record.take_profit == null) {
+        console.log(`[跳过] ${formatRecord(record)} -> 卖出/减仓但缺少 take_profit`);
+        continue;
+      }
+      sellSignals.push(record);
+      continue;
+    }
+
+    console.log(`[跳过] ${formatRecord(record)} -> 操作建议“${advice || "-"}”不是交易信号`);
+  }
+
+  return {
+    buySignals,
+    sellSignals,
+    recentReports: [...recentSeen.values()],
+  };
 }

@@ -107,9 +107,9 @@ async function main(): Promise<void> {
 
   // Dry-run: query DB and print signals without connecting to Longbridge
   if (isDryRun) {
+    console.log(`🔍 [DRY RUN] 模拟运行，不会实际下单\n`);
     const submittedIds = getSubmittedRecordIds();
     const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
-    console.log(`🔍 [DRY RUN] 模拟运行，不会实际下单\n`);
     console.log(`📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
     printDryRunSignals(buySignals, sellRecords, priceThresholdPct, positionPct);
     return;

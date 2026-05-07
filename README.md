@@ -104,13 +104,6 @@ docker run --rm \
   -v $(pwd)/data:/app/data \
   ghcr.io/bowencool/trading-scripts trade --dry-run
 
-# 查看报告
-docker run --rm \
-  -e DB_PATH=/app/db/stock_analysis.db \
-  -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
-  -v $(pwd)/data:/app/data \
-  -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts reports
 ```
 
 **挂载说明**
