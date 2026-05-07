@@ -2,6 +2,8 @@
 
 基于 [Longbridge OpenAPI](https://open.longbridge.com) 的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
 
+
+
 ## 功能
 
 - 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
@@ -122,3 +124,13 @@ docker run --rm \
 > **提示**：`DB_PATH` 与数据目录无关，指向你实际的 `stock_analysis.db` 即可。示例中用 `/app/db/` 只是约定，实际可挂载到任意路径。
 
 > **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
+
+## ⚠️ 免责声明
+
+**本项目仅供学习和研究用途，不构成任何投资建议。**
+
+使用本脚本所产生的一切投资行为及其结果，由使用者本人自行承担全部责任。作者不对因使用本项目而导致的任何直接或间接的经济损失、资金损失或其他任何形式的损害承担责任。
+
+本脚本可能存在未知的 Bug、逻辑缺陷或不可预见的情况，均可能导致意外的交易行为。**在使用前，请充分了解风险，并在模拟账户中进行充分测试。** 请勿将本项目用于超出自身风险承受能力的交易场景。
+
+投资有风险，入市需谨慎。
