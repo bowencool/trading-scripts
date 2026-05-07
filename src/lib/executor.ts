@@ -145,11 +145,9 @@ export async function executeSignal(
   const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
 
   // Check price threshold
-  const threshold = signal.targetPrice * (1 + priceThresholdPct / 100);
+  const threshold = Number((signal.targetPrice * (1 + priceThresholdPct / 100)).toFixed(2));
   if (currentPriceNum > threshold) {
-    console.log(
-      `[SKIP] ${signal.symbol} - 当前价 ${currentPriceNum} 超出目标价 ${signal.targetPrice} 的 ${priceThresholdPct}% 阈值 (${threshold.toFixed(2)})`,
-    );
+    console.log(`[SKIP] ${signal.symbol} - 当前价 ${currentPriceNum} 超出阈值上限 ${threshold}`);
     return null;
   }
 
@@ -187,37 +185,42 @@ export async function executeSignal(
   console.log(
     `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
   );
+  console.log(
+    `   目标价: ${signal.targetPrice} | \x1b[33m限价: ${threshold}（${priceThresholdPct}% 阈值上限）\x1b[0m`,
+  );
   if (signal.stopLoss) {
     console.log(`   止损: ${signal.stopLoss} (MIT 市价触单)`);
   }
   if (signal.takeProfit) {
     console.log(`   止盈: ${signal.takeProfit} (LIT 限价触单)`);
   }
-  console.log(`   ⏳ 限价单等待: 10 秒（超时后自动评估是否以阈值最高价重试）`);
+  console.log(`   ⏳ 限价单等待: 10 秒（超时未成交则跳过）`);
 
   // Confirmation
   if (!autoApprove) {
-    const confirmed = await promptConfirm("\n确认下单？(Enter 确认 / Esc 取消): ");
+    const confirmed = await promptConfirm(
+      `\n确认以 \x1b[33m${threshold}\x1b[0m 买入 ${qty} 股？(Enter 确认 / Esc 取消): `,
+    );
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
       return null;
     }
   }
 
-  // Submit buy order
+  // Submit buy order at threshold price
   const buyResp = await tradeCtx.submitOrder({
     symbol: signal.symbol,
     orderType: OrderType.LO,
     side: OrderSide.Buy,
     timeInForce: TimeInForceType.Day,
     submittedQuantity: new Decimal(String(qty)),
-    submittedPrice: new Decimal(String(signal.targetPrice)),
+    submittedPrice: new Decimal(String(threshold)),
     outsideRth: OutsideRTH.AnyTime,
     remark: `auto-trade:buy:${signal.record.id}`,
   });
 
   const buyOrderId = buyResp.orderId;
-  console.log(`[OK] 买入单已提交: ${buyOrderId}`);
+  console.log(`[OK] 买入单已提交: ${buyOrderId} @ ${threshold}`);
 
   // Track buy order
   trackOrder({
@@ -225,7 +228,7 @@ export async function executeSignal(
     symbol: signal.symbol,
     side: "Buy",
     orderType: "LO",
-    price: String(signal.targetPrice),
+    price: String(threshold),
     quantity: String(qty),
     submittedAt: new Date().toISOString(),
     signalRecordId: signal.record.id,
@@ -240,94 +243,20 @@ export async function executeSignal(
   const buyDetail = await tradeCtx.orderDetail(buyOrderId);
   const buyFilledQty = Number(buyDetail.executedQuantity.toString());
 
-  let filledOrderId = buyOrderId;
-  let totalFilledQty = buyFilledQty;
+  const filledOrderId = buyOrderId;
+  const totalFilledQty = buyFilledQty;
 
   if (buyEvent.status !== OrderStatus.Filled) {
-    const remainingQty = qty - buyFilledQty;
-
-    console.log(
-      `[RETRY] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)}${buyFilledQty > 0 ? `, 已部分成交 ${buyFilledQty} 股` : ""})，重新评估...`,
-    );
-
-    if (remainingQty <= 0) {
-      console.log(`[OK] 限价单 ${buyOrderId} 实际已全部成交 ${buyFilledQty} 股`);
-    } else {
+    if (buyFilledQty <= 0) {
       removeOrder(buyOrderId);
-
-      const retryQuotes = await quoteCtx.quote([signal.symbol]);
-      if (retryQuotes.length === 0) {
-        console.log(`[SKIP] ${signal.symbol} - 无法获取最新行情，跳过`);
-        return null;
-      }
-      const retryPrice = Number(retryQuotes[0].lastDone.toString());
-      const retryThreshold = signal.targetPrice * (1 + priceThresholdPct / 100);
-
-      if (retryPrice <= 0) {
-        console.log(`[SKIP] ${signal.symbol} - 最新价无效: ${retryPrice}，跳过`);
-        return null;
-      }
-
-      if (retryPrice > retryThreshold) {
-        console.log(
-          `[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 仍超出阈值 ${retryThreshold.toFixed(2)}，跳过`,
-        );
-        return null;
-      }
-
-      // Within threshold → submit limit order at threshold price for remaining quantity
-      // (market orders only work during regular trading hours, so use threshold as limit price)
-      const retryLimitPrice = Number(retryThreshold.toFixed(2));
       console.log(
-        `[RETRY] 最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换限价单以 ${retryLimitPrice} 买入 ${remainingQty} 股...`,
+        `[SKIP] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${orderStatusName(buyEvent.status)})，跳过`,
       );
-      const moResp = await tradeCtx.submitOrder({
-        symbol: signal.symbol,
-        orderType: OrderType.LO,
-        side: OrderSide.Buy,
-        timeInForce: TimeInForceType.Day,
-        submittedQuantity: new Decimal(String(remainingQty)),
-        submittedPrice: new Decimal(String(retryLimitPrice)),
-        outsideRth: OutsideRTH.AnyTime,
-        remark: `auto-trade:buy-retry:${signal.record.id}`,
-      });
-
-      filledOrderId = moResp.orderId;
-      console.log(`[OK] 限价单已提交: ${filledOrderId}`);
-
-      trackOrder({
-        orderId: filledOrderId,
-        symbol: signal.symbol,
-        side: "Buy",
-        orderType: "LO",
-        price: String(retryLimitPrice),
-        quantity: String(remainingQty),
-        submittedAt: new Date().toISOString(),
-        signalRecordId: signal.record.id,
-        role: "buy",
-      });
-
-      const moEvent = await orderWatcher.waitForTerminal(filledOrderId, 10_000);
-      if (moEvent.status !== OrderStatus.Filled) {
-        const moDetail = await tradeCtx.orderDetail(filledOrderId);
-        const moFilledQty = Number(moDetail.executedQuantity.toString());
-        totalFilledQty = buyFilledQty + moFilledQty;
-        if (totalFilledQty <= 0) {
-          removeOrder(filledOrderId);
-          console.log(
-            `[SKIP] 限价单 ${filledOrderId} 未成交 (状态: ${orderStatusName(moEvent.status)})，跳过止损/止盈`,
-          );
-          return null;
-        }
-        console.log(
-          `[WARN] 限价单 ${filledOrderId} 未全部成交 (状态: ${orderStatusName(moEvent.status)})，已成交部分 ${moFilledQty} 股，总成交: ${totalFilledQty} 股，仍设置止损/止盈`,
-        );
-      } else {
-        const moDetail = await tradeCtx.orderDetail(filledOrderId);
-        totalFilledQty = buyFilledQty + Number(moDetail.executedQuantity.toString());
-        console.log(`[OK] 限价单已成交，总成交: ${totalFilledQty} 股`);
-      }
+      return null;
     }
+    console.log(
+      `[WARN] 限价单 ${buyOrderId} 部分成交 ${buyFilledQty}/${qty} 股 (状态: ${orderStatusName(buyEvent.status)})，以已成交数量设置止损/止盈`,
+    );
   } else {
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
   }
@@ -582,16 +511,26 @@ export async function executeSellSignal(
 
   // 6. Print trade plan
   const hasSellPrice = signal.targetPrice != null && signal.targetPrice > 0;
-  const sellPrice = hasSellPrice ? (signal.targetPrice as number) : currentPrice;
+  const sellThreshold = hasSellPrice
+    ? Number(((signal.targetPrice as number) * (1 - execConfig.priceThresholdPct / 100)).toFixed(2))
+    : currentPrice;
+  const sellPrice = sellThreshold;
   const orderType = "限价单 (LO)";
   console.log(`\n📋 卖出计划:`);
   console.log(`   标的: ${signal.symbol} | 当前价: ${currentPrice} | 成本价: ${costPrice}`);
   console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
+  if (hasSellPrice) {
+    console.log(
+      `   目标价: ${signal.targetPrice} | \x1b[33m限价: ${sellPrice}（${execConfig.priceThresholdPct}% 阈值下限）\x1b[0m`,
+    );
+  }
   console.log(`   模式: ${isPartial ? "减仓" : "清仓"}`);
 
   // 7. Confirmation
   if (!autoApprove) {
-    const confirmed = await promptConfirm("\n确认卖出？(Enter 确认 / Esc 取消): ");
+    const confirmed = await promptConfirm(
+      `\n确认以 \x1b[33m${sellPrice}\x1b[0m 卖出 ${sellQty} 股？(Enter 确认 / Esc 取消): `,
+    );
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
       return null;
@@ -631,96 +570,22 @@ export async function executeSellSignal(
     role: "sell",
   });
 
-  // 10. Wait for sell order to reach terminal state (30s timeout for limit orders)
-  if (hasSellPrice) {
-    console.log(`[WAIT] 等待限价卖单 ${sellOrderId} 成交... (30 秒超时)`);
-    const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, 30_000);
-    if (sellEvent.status === OrderStatus.Filled) {
-      console.log(`[OK] 限价卖单 ${sellOrderId} 已成交`);
-    } else {
-      const filledDetail = await tradeCtx.orderDetail(sellOrderId);
-      const filledQty = Number(filledDetail.executedQuantity.toString());
-      const remainingQty = sellQty - filledQty;
-
-      if (remainingQty <= 0) {
-        console.log(`[OK] 限价卖单 ${sellOrderId} 实际已全部成交 ${filledQty} 股`);
-      } else {
-        removeOrder(sellOrderId);
-
-        const retryThreshold =
-          (signal.targetPrice as number) * (1 - execConfig.priceThresholdPct / 100);
-        const retryQuotes = await quoteCtx.quote([signal.symbol]);
-        const retryPrice = retryQuotes.length > 0 ? Number(retryQuotes[0].lastDone.toString()) : 0;
-
-        if (retryPrice <= 0) {
-          console.log(`[SKIP] ${signal.symbol} - 无法获取最新行情，跳过`);
-          return null;
-        }
-
-        if (retryPrice < retryThreshold) {
-          console.log(
-            `[SKIP] ${signal.symbol} - 最新价 ${retryPrice} 低于阈值 ${retryThreshold.toFixed(2)}，跳过`,
-          );
-          return null;
-        }
-
-        const retryLimitPrice = Number(retryThreshold.toFixed(2));
-        console.log(
-          `[RETRY] 限价卖单 ${sellOrderId} 30 秒内未成交 (状态: ${orderStatusName(sellEvent.status)}${filledQty > 0 ? `, 已部分成交 ${filledQty} 股` : ""})，最新价 ${retryPrice} 在阈值 ${retryThreshold.toFixed(2)} 内，切换限价单以 ${retryLimitPrice} 卖出 ${remainingQty} 股...`,
-        );
-
-        const retryResp = await tradeCtx.submitOrder({
-          symbol: signal.symbol,
-          orderType: OrderType.LO,
-          side: OrderSide.Sell,
-          timeInForce: TimeInForceType.Day,
-          submittedQuantity: new Decimal(String(remainingQty)),
-          submittedPrice: new Decimal(String(retryLimitPrice)),
-          outsideRth: OutsideRTH.AnyTime,
-          remark,
-        });
-
-        const retryOrderId = retryResp.orderId;
-        console.log(`[OK] 限价单已提交: ${retryOrderId}`);
-
-        trackOrder({
-          orderId: retryOrderId,
-          symbol: signal.symbol,
-          side: "Sell",
-          orderType: "LO",
-          price: String(retryLimitPrice),
-          quantity: String(remainingQty),
-          submittedAt: new Date().toISOString(),
-          signalRecordId: signal.record.id,
-          role: "sell",
-        });
-
-        const retryEvent = await execConfig.orderWatcher.waitForTerminal(retryOrderId, 10_000);
-        if (retryEvent.status === OrderStatus.Filled) {
-          console.log(`[OK] 限价单已成交: ${retryOrderId}`);
-        } else {
-          const retryDetail = await tradeCtx.orderDetail(retryOrderId);
-          const retryFilledQty = Number(retryDetail.executedQuantity.toString());
-          if (retryFilledQty > 0) {
-            console.log(`[OK] 限价单部分成交 ${retryFilledQty} 股`);
-          } else {
-            console.log(
-              `[SKIP] 限价单 ${retryOrderId} 未成交 (状态: ${orderStatusName(retryEvent.status)})，跳过`,
-            );
-            removeOrder(retryOrderId);
-            return null;
-          }
-        }
-      }
-    }
+  // 10. Wait for sell order to reach terminal state (30s timeout)
+  const sellTimeout = hasSellPrice ? 30_000 : 10_000;
+  console.log(`[WAIT] 等待限价卖单 ${sellOrderId} 成交... (${sellTimeout / 1000} 秒超时)`);
+  const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, sellTimeout);
+  if (sellEvent.status === OrderStatus.Filled) {
+    console.log(`[OK] 限价卖单 ${sellOrderId} 已成交`);
   } else {
-    console.log(`[WAIT] 等待限价卖单 ${sellOrderId} 成交... (10 秒超时)`);
-    const sellEvent = await execConfig.orderWatcher.waitForTerminal(sellOrderId, 10_000);
-    if (sellEvent.status === OrderStatus.Filled) {
-      console.log(`[OK] 限价卖单 ${sellOrderId} 已成交`);
+    const filledDetail = await tradeCtx.orderDetail(sellOrderId);
+    const filledQty = Number(filledDetail.executedQuantity.toString());
+    if (filledQty > 0) {
+      console.log(
+        `[WARN] 限价卖单 ${sellOrderId} 部分成交 ${filledQty}/${sellQty} 股 (状态: ${orderStatusName(sellEvent.status)})`,
+      );
     } else {
       console.log(
-        `[WARN] 限价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})`,
+        `[SKIP] 限价卖单 ${sellOrderId} 未成交 (状态: ${orderStatusName(sellEvent.status)})，跳过`,
       );
       removeOrder(sellOrderId);
       return null;
