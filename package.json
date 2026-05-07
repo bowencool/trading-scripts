@@ -1,6 +1,6 @@
 {
   "name": "trading-scripts",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Simple TypeScript trading scripts for local and server use",
   "private": true,
   "scripts": {
