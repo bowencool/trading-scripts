@@ -1,5 +1,6 @@
 export interface AnalysisRecord {
   id: number;
+  query_id: string | null;
   code: string;
   name: string | null;
   report_type: string | null;
@@ -7,6 +8,9 @@ export interface AnalysisRecord {
   operation_advice: string | null;
   trend_prediction: string | null;
   analysis_summary: string | null;
+  raw_result: string | null;
+  news_content: string | null;
+  context_snapshot: string | null;
   ideal_buy: number | null;
   secondary_buy: number | null;
   stop_loss: number | null;
