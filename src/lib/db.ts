@@ -5,28 +5,29 @@ const COLUMNS = `id, code, name, report_type, sentiment_score,
   operation_advice, trend_prediction, analysis_summary,
   ideal_buy, secondary_buy, stop_loss, take_profit, created_at`;
 
-const A_SHARE_RE = /^[036]\d+$/;
 const BUY_ADVICE = new Set(["买入", "加仓"]);
 const SELL_ADVICE = new Set(["卖出", "减仓"]);
 
-function formatRecord(record: AnalysisRecord): string {
-  return `${record.created_at} #${record.id} [${record.code}] ${record.name ?? "未知"}`;
-}
+const A_SHARE_RE = /^[036]\d+$/;
+
+// ── Time windows ──────────────────────────────────────────────────────────────
+
+/** Main signal window (hours). Set via WINDOW_HOURS env var. */
+export const WINDOW_HOURS = Number(process.env.WINDOW_HOURS || "4");
+
+/** Extended window for SL/TP recovery. */
+const SLTP_WINDOW_HOURS = 24;
 
 // ── Raw fetch ─────────────────────────────────────────────────────────────────
 
-/** Configurable time window (hours) for fetching records. Set via WINDOW_HOURS env var. */
-export const WINDOW_HOURS = Number(process.env.WINDOW_HOURS || "4");
-
-/** Raw fetch: all analysis_history records from the last N hours, no filtering. */
-function fetchRaw(dbPath: string): AnalysisRecord[] {
+function fetchRaw(dbPath: string, hours: number): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     return db
       .prepare(
         `SELECT ${COLUMNS}
          FROM analysis_history
-         WHERE created_at >= datetime('now', '-${WINDOW_HOURS} hours')
+         WHERE created_at >= datetime('now', '-${hours} hours')
          ORDER BY created_at DESC`,
       )
       .all() as unknown as AnalysisRecord[];
@@ -34,6 +35,30 @@ function fetchRaw(dbPath: string): AnalysisRecord[] {
     db.close();
   }
 }
+
+/**
+ * Fetch the most recent record with stop_loss/take_profit for a given symbol.
+ * Searches without time window limit — for long-held positions.
+ */
+function fetchLatestSlTpRecord(dbPath: string, code: string): AnalysisRecord | null {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare(
+        `SELECT ${COLUMNS}
+         FROM analysis_history
+         WHERE code = ? AND (stop_loss IS NOT NULL OR take_profit IS NOT NULL)
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .all(code) as unknown as AnalysisRecord[];
+    return rows.length > 0 ? rows[0] : null;
+  } finally {
+    db.close();
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
  * Risk/reward ratio: (take_profit - ideal_buy) / (ideal_buy - stop_loss).
@@ -49,42 +74,32 @@ export function computeRiskReward(r: AnalysisRecord): number | null {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Open DB once, fetch all records from last 4 hours, then apply in-memory
- * deduplication and filtering. Keeps SQL minimal — all business logic lives
- * in TypeScript so it's easy to iterate on signal rules.
+ * Fetch all records from the main window, deduplicate by code (keep latest),
+ * and split into buy/sell signals. No excludeRecordIds — dedup is now based
+ * on portfolio comparison.
  */
-export function queryAll(
-  dbPath: string,
-  excludeRecordIds: Set<number>,
-): {
+export function queryAll(dbPath: string): {
   buySignals: AnalysisRecord[];
   sellSignals: AnalysisRecord[];
   recentReports: AnalysisRecord[];
 } {
-  const raw = fetchRaw(dbPath);
+  const raw = fetchRaw(dbPath, WINDOW_HOURS);
   const recentSeen = new Map<string, AnalysisRecord>();
   const tradeSeen = new Map<string, AnalysisRecord>();
   const buySignals: AnalysisRecord[] = [];
   const sellSignals: AnalysisRecord[] = [];
 
   for (const record of raw) {
+    // Build recent reports list (all symbols except A-shares)
     if (!A_SHARE_RE.test(record.code) && !recentSeen.has(record.code)) {
       recentSeen.set(record.code, record);
     }
 
-    if (excludeRecordIds.has(record.id)) {
-      console.log(`[跳过] ${formatRecord(record)} -> 已下单`);
-      continue;
-    }
-
     if (A_SHARE_RE.test(record.code)) {
-      console.log(`[跳过] ${formatRecord(record)} -> 暂不支持 A 股交易`);
       continue;
     }
 
     if (tradeSeen.has(record.code)) {
-      const kept = tradeSeen.get(record.code);
-      console.log(`[跳过] ${formatRecord(record)} -> 已被更新报告#${kept?.id}覆盖`);
       continue;
     }
 
@@ -94,7 +109,6 @@ export function queryAll(
 
     if (BUY_ADVICE.has(advice)) {
       if (record.ideal_buy == null) {
-        console.log(`[跳过] ${formatRecord(record)} -> 买入/加仓但缺少 ideal_buy`);
         continue;
       }
       buySignals.push(record);
@@ -103,14 +117,10 @@ export function queryAll(
 
     if (SELL_ADVICE.has(advice)) {
       if (record.take_profit == null) {
-        console.log(`[跳过] ${formatRecord(record)} -> 卖出/减仓但缺少 take_profit`);
         continue;
       }
       sellSignals.push(record);
-      continue;
     }
-
-    console.log(`[跳过] ${formatRecord(record)} -> 操作建议“${advice || "-"}”不是交易信号`);
   }
 
   return {
@@ -118,4 +128,32 @@ export function queryAll(
     sellSignals,
     recentReports: [...recentSeen.values()],
   };
+}
+
+/**
+ * SL/TP lookup for a given symbol. Uses a 24h window first,
+ * then falls back to the most recent record with SL/TP (no time limit).
+ */
+export function querySlTpRecord(dbPath: string, code: string): AnalysisRecord | null {
+  // 1. Try 24h window
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare(
+        `SELECT ${COLUMNS}
+         FROM analysis_history
+         WHERE code = ?
+           AND created_at >= datetime('now', '-${SLTP_WINDOW_HOURS} hours')
+           AND (stop_loss IS NOT NULL OR take_profit IS NOT NULL)
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .all(code) as unknown as AnalysisRecord[];
+    if (rows.length > 0) return rows[0];
+  } finally {
+    db.close();
+  }
+
+  // 2. Fallback: most recent record with SL/TP (no time limit)
+  return fetchLatestSlTpRecord(dbPath, code);
 }

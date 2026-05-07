@@ -1,80 +1,79 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import {
-  cleanupOcoOrders,
-  cleanupOrphanedOrders,
-  pruneExpiredOrders,
-  pruneStaleBuyOrders,
-} from "./lib/cleanup.js";
-import { queryAll, WINDOW_HOURS } from "./lib/db.js";
-import { executeSellSignal, executeSignal, patchMissingSlTp } from "./lib/executor.js";
+import { cleanupOrphanedOrders } from "./lib/cleanup.js";
+import { buildActionPlan } from "./lib/comparator.js";
+import { queryAll, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
+import { executeAction, FatalError } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
-import { toLongbridgeSymbol } from "./lib/symbols.js";
-import { drainWrites, getSubmittedRecordIds, loadTrackedOrders } from "./lib/tracker.js";
-import type { AnalysisRecord, TradeSignal } from "./lib/types.js";
+import { fetchPortfolioState } from "./lib/portfolio.js";
+import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
-function printDryRunSignals(
-  buySignals: AnalysisRecord[],
-  sellRecords: AnalysisRecord[],
-  priceThresholdPct: number,
-  buyPct: number,
-  sellPct: number,
-): void {
-  const allSignals = [
-    ...buySignals.map((r) => ({ record: r, side: "买入" as const })),
-    ...sellRecords.map((r) => ({
-      record: r,
-      side: (r.operation_advice ?? "").includes("减仓") ? ("减仓" as const) : ("卖出" as const),
-    })),
-  ];
+// ── Display ───────────────────────────────────────────────────────────────────
 
-  if (allSignals.length === 0) {
+const ACTION_LABEL: Record<ActionKind, string> = {
+  NEW_BUY: "🆕 新建买入",
+  UPDATE_BUY: "🔄 更新买单",
+  SELL_FULL: "📉 全仓卖出",
+  SELL_PARTIAL: "📉 部分减仓",
+  SYNC_SL_TP: "🔧 同步 SL/TP",
+  RECOVER_SL_TP: "🛠️ 补挂 SL/TP",
+  MERGE_SL_TP: "🔗 合并重复 SL/TP",
+  HOLD: "⏸️  持仓匹配",
+};
+
+function printActionPlan(plans: ActionPlan[]): void {
+  if (plans.length === 0) {
     console.log("没有符合条件的交易信号。");
     return;
   }
 
-  console.log(
-    `\n找到 ${allSignals.length} 个信号待处理（${buySignals.length} 买入 / ${sellRecords.length} 卖出）\n`,
-  );
+  const actionPlans = plans.filter((p) => p.action !== "HOLD");
+  const holdPlans = plans.filter((p) => p.action === "HOLD");
 
-  for (const { record, side } of allSignals) {
-    const symbol = toLongbridgeSymbol(record.code);
-    const symbolDisplay = symbol ?? record.code;
+  console.log(`\n📋 行动计划: ${actionPlans.length} 个操作 + ${holdPlans.length} 个持仓跳过\n`);
 
+  for (const plan of plans) {
+    const { symbol, record, action } = plan;
+    const label = ACTION_LABEL[action];
     console.log(`${"=".repeat(80)}`);
-    console.log(`🔹 [${record.code}] ${record.name ?? "未知"} → ${symbolDisplay}`);
+    console.log(`${label} [${record.code}] ${record.name ?? "未知"} → ${symbol}`);
     console.log(`   报告类型: ${record.report_type ?? "-"} | 时间: ${record.created_at}`);
     console.log(
       `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`,
     );
     console.log(
-      `   理想买入: ${record.ideal_buy ?? "-"} | 次选买入: ${record.secondary_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
+      `   理想买入: ${record.ideal_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
     );
-    if (record.analysis_summary) {
-      console.log(`   摘要: ${record.analysis_summary}`);
+
+    if (plan.holding) {
+      console.log(
+        `   持仓: ${plan.holding.quantity} 股 | 可卖: ${plan.holding.availableQuantity} 股 | 成本价: ${plan.holding.costPrice}`,
+      );
     }
 
-    if (side === "买入" && record.ideal_buy) {
-      const threshold = record.ideal_buy * (1 + priceThresholdPct / 100);
-      console.log(`\n   📋 交易计划:`);
+    if (plan.pendingBuyOrder) {
       console.log(
-        `      方向: 买入 | 目标价: ${record.ideal_buy} | 价格阈值: +${priceThresholdPct}% → ${threshold.toFixed(2)}`,
+        `   Pending 买单: ${plan.pendingBuyOrder.orderId} @ ${plan.pendingBuyOrder.price}`,
       );
-      if (record.stop_loss) console.log(`      止损: ${record.stop_loss} (MIT 市价触单)`);
-      if (record.take_profit) console.log(`      止盈: ${record.take_profit} (LIT 限价触单)`);
-      console.log(`      买入比例: ${buyPct}%（需连接 Longbridge 才能计算具体数量）`);
-    } else if (side === "卖出" || side === "减仓") {
-      console.log(`\n   📋 交易计划:`);
-      console.log(
-        `      方向: ${side} | 模式: ${side === "减仓" ? `部分减仓 ${sellPct}%` : "全部清仓"}`,
-      );
-    } else {
-      console.log(`\n   📋 交易计划:`);
-      console.log(`      方向: ${side} | 目标价: ${record.ideal_buy ?? "-"}`);
     }
+
+    if (plan.existingSlOrder) {
+      console.log(
+        `   现有止损: ${plan.existingSlOrder.orderId} @ ${plan.existingSlOrder.triggerPrice}`,
+      );
+    }
+
+    if (plan.existingTpOrder) {
+      console.log(
+        `   现有止盈: ${plan.existingTpOrder.orderId} @ ${plan.existingTpOrder.triggerPrice}`,
+      );
+    }
+
     console.log(`${"=".repeat(80)}`);
   }
 }
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -87,12 +86,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (!isDryRun) {
-    const clientId = process.env.CLIENT_ID;
-    if (!clientId) {
-      console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
-      process.exit(1);
-    }
+  const clientId = process.env.CLIENT_ID;
+  if (!clientId) {
+    console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
+    process.exit(1);
   }
 
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
@@ -113,103 +110,72 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Dry-run: query DB and print signals without connecting to Longbridge
   if (isDryRun) {
-    console.log(`🔍 [DRY RUN] 模拟运行，不会实际下单\n`);
-    const submittedIds = getSubmittedRecordIds();
-    const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
-    console.log(`📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
-    printDryRunSignals(buySignals, sellRecords, priceThresholdPct, buyPct, sellPct);
-    return;
+    console.log(`🔍 [DRY RUN] 模拟运行，仅展示行动计划，不会实际下单\n`);
   }
 
+  // Connect to Longbridge (dry-run also needs readonly APIs for portfolio state)
   console.log("🔐 正在连接 Longbridge...");
-  const clientId = process.env.CLIENT_ID ?? "";
   const config = await buildConfig(clientId);
   const quoteCtx = QuoteContext.new(config);
   const tradeCtx = TradeContext.new(config);
 
-  // Check tracked orders via API, remove cancelled/expired/rejected ones
-  // so their signals can be re-processed
-  await pruneStaleBuyOrders(tradeCtx);
-  await cleanupOrphanedOrders(tradeCtx);
-  await cleanupOcoOrders(tradeCtx);
-  // Check for filled buy orders missing SL/TP (from prior crash)
-  await patchMissingSlTp(tradeCtx);
-
-  const pruned = pruneExpiredOrders();
-  if (pruned > 0) {
-    console.log(`🗑️  已清理 ${pruned} 条超过 2 周的过期订单记录`);
+  // 1. Clean up orphaned orders (skip in dry-run to avoid side effects)
+  if (!isDryRun) {
+    await cleanupOrphanedOrders(tradeCtx);
   }
 
-  // Query DB once after cleanup (free'd signal IDs are now available)
-  const submittedIds = getSubmittedRecordIds();
-  const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
+  // 2. Fetch portfolio state (holdings + active orders)
+  console.log("\n📊 获取持仓和活跃订单...");
+  const portfolio = await fetchPortfolioState(tradeCtx);
 
+  console.log(`\n📊 持仓: ${portfolio.holdings.size} 只`);
+  for (const [symbol, holding] of portfolio.holdings) {
+    console.log(
+      `   ${symbol}: ${holding.quantity} 股 (可用 ${holding.availableQuantity}) @ 成本 ${holding.costPrice}`,
+    );
+  }
+  console.log(`📊 活跃订单: ${portfolio.activeOrders.length} 个`);
+
+  // 3. Query DB signals
+  const { buySignals, sellSignals, recentReports } = queryAll(dbPath);
   console.log(`\n📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
 
-  const signals: TradeSignal[] = [];
-  for (const record of buySignals) {
-    const symbol = toLongbridgeSymbol(record.code);
-    if (!symbol) {
-      console.warn(`[SKIP] 无法映射代码 "${record.code}" 到 Longbridge symbol`);
-      continue;
+  // 4. Fetch SL/TP records for all held symbols
+  const slTpRecords = new Map<string, AnalysisRecord>();
+  for (const symbol of portfolio.holdings.keys()) {
+    const code = symbolToCode(symbol);
+    if (!code) continue;
+    const slTpRecord = querySlTpRecord(dbPath, code);
+    if (slTpRecord) {
+      slTpRecords.set(symbol, slTpRecord);
     }
-    signals.push({
-      record,
-      symbol,
-      side: "Buy",
-      // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
-      targetPrice: record.ideal_buy!,
-      stopLoss: record.stop_loss,
-      takeProfit: record.take_profit,
-    });
   }
 
-  // Sell signals: "卖出" = full exit, "减仓" = partial exit
-  for (const record of sellRecords) {
-    const symbol = toLongbridgeSymbol(record.code);
-    if (!symbol) {
-      console.warn(`[SKIP] 无法映射代码 "${record.code}" 到 Longbridge symbol`);
-      continue;
-    }
-    const isPartial = (record.operation_advice ?? "").includes("减仓");
-    signals.push({
-      record,
-      symbol,
-      side: "Sell",
-      targetPrice: record.take_profit,
-      stopLoss: null,
-      takeProfit: null,
-      sellMode: isPartial ? "reduce" : "full",
-    });
-  }
+  // 5. Build action plan
+  const actionPlan = buildActionPlan(portfolio, buySignals, sellSignals, slTpRecords);
 
-  console.log(
-    `\n找到 ${signals.length} 个信号待处理（${signals.filter((s) => s.side === "Buy").length} 买入 / ${signals.filter((s) => s.side === "Sell").length} 卖出）\n`,
-  );
+  // 6. Display action plan
+  printActionPlan(actionPlan);
 
-  if (signals.length === 0) {
-    console.log("没有符合条件的交易信号。");
+  // 7. Dry-run stops here — no execution
+  if (isDryRun) {
+    console.log("\n🔍 [DRY RUN] 行动计划展示完毕，未执行任何操作。");
     return;
   }
 
-  // Start WebSocket order push listener
+  const actionable = actionPlan.filter((p) => p.action !== "HOLD");
+
+  if (actionable.length === 0) {
+    console.log("没有需要执行的操作。");
+    return;
+  }
+
+  // 8. Start WebSocket order push listener
   const orderWatcher = new OrderWatcher(tradeCtx);
   await orderWatcher.start();
 
-  // Register remaining OCO pairs with the watcher for real-time monitoring
-  const remainingOrders = loadTrackedOrders();
-  const seen = new Set<string>();
-  for (const o of remainingOrders) {
-    if (o.ocoPairOrderId && !seen.has(o.orderId)) {
-      seen.add(o.orderId);
-      seen.add(o.ocoPairOrderId);
-      orderWatcher.watchOcoPair(o.orderId, o.ocoPairOrderId);
-      console.log(`[WS] OCO 实时监控已注册: ${o.orderId} ↔ ${o.ocoPairOrderId}`);
-    }
-  }
-
+  // 9. Execute each action serially
   const execConfig = {
     quoteCtx,
     tradeCtx,
@@ -219,36 +185,49 @@ async function main(): Promise<void> {
     sellPct,
     priceThresholdPct,
   };
-  for (const signal of signals) {
+
+  for (const plan of actionable) {
     try {
-      if (signal.side === "Buy") {
-        await executeSignal(execConfig, signal);
-      } else {
-        await executeSellSignal(execConfig, signal);
-      }
+      await executeAction(execConfig, plan);
     } catch (err) {
-      console.error(`[ERR] ${signal.symbol} 处理异常，跳过: ${err}`);
+      if (err instanceof FatalError) {
+        console.error(`[FATAL] ${err.message} — 终止后续执行`);
+        break;
+      }
+      console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
+      // Non-fatal: continue with next plan
     }
   }
 
-  // Keep the process alive briefly to allow any final OCO pushes to be processed
-  await new Promise((r) => setTimeout(r, 2000));
-
-  try {
-    await orderWatcher.stop();
-  } catch (err) {
-    console.error(`[WARN] 关闭 OrderWatcher 失败: ${err}`);
-  }
-
-  // Flush any pending order tracking writes before exit
-  await drainWrites();
-
-  // Longbridge SDK holds open gRPC connections that keep the event loop alive.
-  // Force exit since this is a CLI script, not a long-running server.
-  process.exit(0);
+  // 10. Cleanup
+  await orderWatcher.stop();
+  console.log("\n✅ 完成");
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+/**
+ * Reverse map a Longbridge symbol back to a DB code for SL/TP lookup.
+ * "01810.HK" → "HK01810", "AAPL.US" → "AAPL"
+ */
+function symbolToCode(symbol: string): string | null {
+  if (symbol.endsWith(".HK")) {
+    const num = symbol.replace(".HK", "");
+    return `HK${num}`;
+  }
+  if (symbol.endsWith(".US")) {
+    return symbol.replace(".US", "");
+  }
+  if (symbol.endsWith(".SH")) {
+    return symbol.replace(".SH", "");
+  }
+  if (symbol.endsWith(".SZ")) {
+    return symbol.replace(".SZ", "");
+  }
+  return null;
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error("未捕获错误:", err);
+    process.exit(1);
+  });

@@ -1,123 +1,136 @@
-import { type OrderDetail, OrderStatus, type TradeContext } from "longbridge";
-import { loadTrackedOrders, removeOrder } from "./tracker.js";
-import { isTerminal, orderStatusName } from "./utils.js";
+import { OrderStatus, type TradeContext } from "longbridge";
+import { isAutoTradeRemark, parseRemarkRole } from "./symbols.js";
 
 const API_DELAY_MS = 200;
+const HISTORY_DAYS = 30;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/**
- * Check tracked buy/sell orders via API and remove any that have reached a
- * terminal state without being Filled. This frees their signalRecordIds so
- * the signals can be re-processed on the next run.
- */
-export async function pruneStaleBuyOrders(tradeCtx: TradeContext): Promise<void> {
-  console.log("🔍 检查已追踪订单状态...");
-  const orders = loadTrackedOrders();
-  const buySellOrders = orders.filter((o) => o.role === "buy" || o.role === "sell");
-
-  let pruned = 0;
-
-  for (let i = 0; i < buySellOrders.length; i++) {
-    const order = buySellOrders[i];
-    let detail: OrderDetail | undefined;
-    try {
-      detail = await tradeCtx.orderDetail(order.orderId);
-    } catch (err) {
-      console.warn(`[WARN] 查询订单状态失败: ${err}`);
-      continue;
-    }
-    if (i < buySellOrders.length - 1) {
-      await delay(API_DELAY_MS);
-    }
-    if (isTerminal(detail.status) && detail.status !== OrderStatus.Filled) {
-      const statusName =
-        detail.status === OrderStatus.Canceled
-          ? "已撤单"
-          : detail.status === OrderStatus.Expired
-            ? "已过期"
-            : detail.status === OrderStatus.Rejected
-              ? "被拒绝"
-              : `状态${detail.status}`;
-      console.log(
-        `[PRUNE] ${order.symbol} ${order.orderId} ${statusName}，移除跟踪记录（信号 ${order.signalRecordId} 可重新处理）`,
-      );
-      removeOrder(order.orderId);
-      pruned++;
-    }
-  }
-
-  if (pruned > 0) {
-    console.log(`✅ 已清理 ${pruned} 条过期订单记录`);
-  } else {
-    console.log("✅ 已追踪订单均有效");
-  }
+function isTerminal(status: OrderStatus): boolean {
+  return (
+    status === OrderStatus.Filled ||
+    status === OrderStatus.Canceled ||
+    status === OrderStatus.Rejected ||
+    status === OrderStatus.Expired
+  );
 }
 
+/**
+ * Clean up orphaned orders based on portfolio state + todayOrders() + historyOrders():
+ *
+ * 1. **Orphan SL/TP**: symbol has SL/TP but NO holding AND no pending buy → cancel
+ *    (uses stockPositions() so cross-day filled buys are correctly detected)
+ * 2. **OCO cleanup**: SL filled but TP still active (or vice versa) → cancel the other
+ */
 export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
   console.log("🧹 清理孤儿订单...");
-  const orders = loadTrackedOrders();
-  const slTpOrders = orders.filter((o) => o.role === "stop_loss" || o.role === "take_profit");
-  const buyOrderIds = new Set(orders.filter((o) => o.role === "buy").map((o) => o.orderId));
 
-  // Partition: orphaned (no linked buy) vs linked (need to check buy status)
-  const orphaned = slTpOrders.filter(
-    (o) => !o.linkedBuyOrderId || !buyOrderIds.has(o.linkedBuyOrderId),
-  );
-  const linked = slTpOrders.filter(
-    (o) => o.linkedBuyOrderId && buyOrderIds.has(o.linkedBuyOrderId),
-  );
+  const endAt = new Date();
+  const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
+
+  // Fetch holdings, today's orders, and history pending orders in parallel
+  const [positionsResp, todayOrders, historyOrdersResp] = await Promise.all([
+    tradeCtx.stockPositions(),
+    tradeCtx.todayOrders(),
+    tradeCtx.historyOrders({
+      status: [OrderStatus.New, OrderStatus.NotReported, OrderStatus.PartialFilled],
+      startAt,
+      endAt,
+    }),
+  ]);
+
+  const heldSymbols = new Set<string>();
+  for (const pos of positionsResp.channels.flatMap((ch) => ch.positions)) {
+    if (Number(pos.quantity.toString()) > 0) {
+      heldSymbols.add(pos.symbol);
+    }
+  }
+
+  // Merge today's + history orders, dedup by orderId (today takes priority)
+  const seenIds = new Set<string>();
+  const allOrders: typeof todayOrders = [];
+  for (const order of todayOrders) {
+    if (!seenIds.has(order.orderId)) {
+      allOrders.push(order);
+      seenIds.add(order.orderId);
+    }
+  }
+  for (const order of historyOrdersResp) {
+    if (!seenIds.has(order.orderId)) {
+      allOrders.push(order);
+      seenIds.add(order.orderId);
+    }
+  }
+
+  const ourOrders = allOrders.filter((o) => isAutoTradeRemark(o.remark ?? ""));
+
+  // Group orders by symbol
+  const bySymbol = new Map<string, typeof ourOrders>();
+  for (const order of ourOrders) {
+    const existing = bySymbol.get(order.symbol) ?? [];
+    existing.push(order);
+    bySymbol.set(order.symbol, existing);
+  }
 
   let cleaned = 0;
 
-  // Cancel orphaned orders directly
-  for (const slTp of orphaned) {
-    try {
-      await tradeCtx.cancelOrder(slTp.orderId);
-      console.log(`[CANCEL] 已取消孤立订单 ${slTp.orderId} (${slTp.role}, ${slTp.symbol})`);
-      removeOrder(slTp.orderId);
-      cleaned++;
-    } catch (err) {
-      console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
-    }
-  }
+  for (const [symbol, orders] of bySymbol) {
+    const allSlOrders = orders.filter((o) => parseRemarkRole(o.remark ?? "") === "stop_loss");
+    const allTpOrders = orders.filter((o) => parseRemarkRole(o.remark ?? "") === "take_profit");
+    const activeSlOrders = allSlOrders.filter((o) => !isTerminal(o.status));
+    const activeTpOrders = allTpOrders.filter((o) => !isTerminal(o.status));
 
-  // Sequential-fetch linked buy order statuses with delay to avoid rate limiting
-  for (let i = 0; i < linked.length; i++) {
-    const slTp = linked[i];
-    let buyDetail: OrderDetail | undefined;
-    try {
-      // biome-ignore lint/style/noNonNullAssertion: filtered above
-      buyDetail = await tradeCtx.orderDetail(slTp.linkedBuyOrderId!);
-    } catch (err) {
-      console.error(`[WARN] 查询关联买单状态失败: ${err}`);
-      continue;
+    // 1. Orphan cleanup: cancel SL/TP only if symbol is NOT held AND no pending buy
+    if (activeSlOrders.length > 0 || activeTpOrders.length > 0) {
+      const hasHolding = heldSymbols.has(symbol);
+      const hasPendingBuy = orders.some(
+        (o) => parseRemarkRole(o.remark ?? "") === "buy" && !isTerminal(o.status),
+      );
+
+      if (!hasHolding && !hasPendingBuy) {
+        for (const slTp of [...activeSlOrders, ...activeTpOrders]) {
+          try {
+            await tradeCtx.cancelOrder(slTp.orderId);
+            const role = parseRemarkRole(slTp.remark ?? "") === "stop_loss" ? "止损" : "止盈";
+            console.log(`[CANCEL] 已取消孤儿${role}订单 ${slTp.orderId} (${symbol} 无持仓)`);
+            cleaned++;
+          } catch (err) {
+            console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
+          }
+          await delay(API_DELAY_MS);
+        }
+      }
     }
-    if (i < linked.length - 1) {
-      await delay(API_DELAY_MS);
+
+    // 2. OCO cleanup: if SL filled but TP still active, cancel TP (and vice versa)
+    const filledSl = allSlOrders.filter((o) => o.status === OrderStatus.Filled);
+    const filledTp = allTpOrders.filter((o) => o.status === OrderStatus.Filled);
+
+    if (filledSl.length > 0) {
+      for (const tp of activeTpOrders) {
+        try {
+          await tradeCtx.cancelOrder(tp.orderId);
+          console.log(`[OCO] 止损已成交，取消止盈 ${tp.orderId} (${symbol})`);
+          cleaned++;
+        } catch (err) {
+          console.error(`[WARN] 取消止盈 ${tp.orderId} 失败: ${err}`);
+        }
+        await delay(API_DELAY_MS);
+      }
     }
-    if (
-      buyDetail.status === OrderStatus.Canceled ||
-      buyDetail.status === OrderStatus.Expired ||
-      buyDetail.status === OrderStatus.Rejected
-    ) {
-      try {
-        await tradeCtx.cancelOrder(slTp.orderId);
-        const statusName =
-          buyDetail.status === OrderStatus.Canceled
-            ? "Canceled"
-            : buyDetail.status === OrderStatus.Expired
-              ? "Expired"
-              : "Rejected";
-        console.log(
-          `[CANCEL] 买单 ${slTp.linkedBuyOrderId} 已${statusName}，取消关联订单 ${slTp.orderId} (${slTp.role})`,
-        );
-        removeOrder(slTp.orderId);
-        cleaned++;
-      } catch (err) {
-        console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
+
+    if (filledTp.length > 0) {
+      for (const sl of activeSlOrders) {
+        try {
+          await tradeCtx.cancelOrder(sl.orderId);
+          console.log(`[OCO] 止盈已成交，取消止损 ${sl.orderId} (${symbol})`);
+          cleaned++;
+        } catch (err) {
+          console.error(`[WARN] 取消止损 ${sl.orderId} 失败: ${err}`);
+        }
+        await delay(API_DELAY_MS);
       }
     }
   }
@@ -128,91 +141,3 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     console.log("✅ 无孤儿订单");
   }
 }
-
-/**
- * OCO cleanup: for each SL/TP order that has an ocoPairOrderId,
- * check if the pair has been filled. If so, cancel this order.
- * This prevents the scenario where SL triggers → stock sold → TP still live → unintended short.
- */
-export async function cleanupOcoOrders(tradeCtx: TradeContext): Promise<void> {
-  console.log("🔗 检查 OCO 互斥订单...");
-  const orders = loadTrackedOrders();
-  const ocoOrders = orders.filter(
-    (o) => (o.role === "stop_loss" || o.role === "take_profit") && o.ocoPairOrderId,
-  );
-
-  if (ocoOrders.length === 0) {
-    console.log("✅ 无 OCO 订单");
-    return;
-  }
-
-  // Deduplicate: each pair appears twice (A→B and B→A), only process once
-  const processed = new Set<string>();
-  let ocoCleaned = 0;
-
-  for (const order of ocoOrders) {
-    // biome-ignore lint/style/noNonNullAssertion: OCO orders always have pairOrderId
-    const pairId = order.ocoPairOrderId!;
-    const pairKey = [order.orderId, pairId].sort().join(":");
-    if (processed.has(pairKey)) continue;
-    processed.add(pairKey);
-
-    try {
-      const detail = await tradeCtx.orderDetail(order.orderId);
-      await delay(API_DELAY_MS);
-      const pairDetail = await tradeCtx.orderDetail(pairId);
-
-      // If both already in terminal state, clean up tracking
-      if (isTerminal(detail.status) && isTerminal(pairDetail.status)) {
-        console.log(
-          `[OCO] 订单 ${order.orderId} (${order.role}, ${orderStatusName(detail.status)}) 与 ${pairId} (${orderStatusName(pairDetail.status)}) 均已结束，清理跟踪记录`,
-        );
-        removeOrder(order.orderId);
-        removeOrder(pairId);
-        ocoCleaned++;
-        continue;
-      }
-
-      // If this order is filled but pair is still active → cancel pair
-      if (detail.status === OrderStatus.Filled && !isTerminal(pairDetail.status)) {
-        try {
-          await tradeCtx.cancelOrder(pairId);
-          console.log(
-            `[OCO] ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId} 已成交，取消对端 ${pairId}`,
-          );
-          removeOrder(order.orderId);
-          removeOrder(pairId);
-          ocoCleaned++;
-        } catch (err) {
-          console.error(`[WARN] OCO 取消对端 ${pairId} 失败: ${err}`);
-        }
-        continue;
-      }
-
-      // If pair is filled but this order is still active → cancel this order
-      if (pairDetail.status === OrderStatus.Filled && !isTerminal(detail.status)) {
-        try {
-          await tradeCtx.cancelOrder(order.orderId);
-          console.log(
-            `[OCO] 对端 ${pairId} 已成交，取消 ${order.role === "stop_loss" ? "止损" : "止盈"} ${order.orderId}`,
-          );
-          removeOrder(order.orderId);
-          removeOrder(pairId);
-          ocoCleaned++;
-        } catch (err) {
-          console.error(`[WARN] OCO 取消订单 ${order.orderId} 失败: ${err}`);
-        }
-      }
-    } catch (err) {
-      console.error(`[WARN] OCO 查询订单 ${order.orderId}/${pairId} 失败: ${err}`);
-    }
-  }
-
-  if (ocoCleaned > 0) {
-    console.log(`✅ OCO 清理完成，处理 ${ocoCleaned} 对`);
-  } else {
-    console.log("✅ 无需处理的 OCO 订单");
-  }
-}
-
-export { pruneExpiredOrders } from "./tracker.js";

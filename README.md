@@ -7,44 +7,44 @@
 ## 功能
 
 - 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
+- **实时持仓对比**：从 Longbridge API 获取持仓和活跃订单，与信号做对比，无需本地状态文件
 - 自动过滤 A 股，仅处理港股和美股标的
 - **智能取价**：优先使用盘口深度（卖一/买一），其次盘前/盘后/夜盘价格，最后 `lastDone`
 - 买入信号：以阈值最高价（目标价 × (1 + 阈值%)）提交限价单 (LO)，10 秒超时未成交则跳过
-- 卖出信号：以阈值最低价（目标价 × (1 - 阈值%)）提交限价单 (LO)，支持全仓卖出和按比例减仓
-- 等待买单成交后再提交止损 (MIT) / 止盈 (LIT)，防止幽灵订单
-- WebSocket 实时监控 OCO 对，一方成交立即撤销另一方
-- 孤儿订单清理，自动撤销无父订单的止损/止盈
-- 过期订单记录自动清理（保留最近 2 周）
-- 订单追踪，防止重复下单
+- 卖出信号：以买一价提交限价单 (LO)，支持全仓卖出和按比例减仓；卖出前取消 SL/TP，失败时自动回滚
+- SL/TP 自动同步：持仓数量或信号价格变化时自动调整挂单
+- SL/TP 自动补挂：持仓但无止损止盈时，从 24h 内信号（或最近记录）中恢复
+- 孤儿订单清理：基于 `todayOrders()` API 自动撤销无父订单的 SL/TP + OCO 互斥清理
 - 支持人工确认和全自动 (`--auto-approve`) 两种模式
 
 ## 交易流程
 
 ```
-读取分析报告 → 过滤 A 股 → 分离买入/卖出信号 → 转换 Symbol
-    ↓
-清理过期订单记录（已取消/拒绝/过期）
-    ↓
-清理孤儿订单 + OCO 残留对
-    ↓
-注册已有 OCO 对到 WebSocket 监听
-    ↓
-┌─── 买入信号 ────────────────────────────────────────────┐
-│ 智能取价（卖一 > 盘前/盘后/夜盘 > lastDone）             │
-│ 检查价格阈值 → 计算数量（尊重手数）                      │
-│ 展示计划 → 人工确认（--auto-approve 跳过）               │
-│ 以阈值最高价提交 LO → 10s 超时未成交则跳过               │
-│ 成交后 → 提交 MIT 止损 + LIT 止盈 → OCO 绑定            │
-└─────────────────────────────────────────────────────────┘
-┌─── 卖出信号 ────────────────────────────────────────────┐
-│ 查询持仓 → 计算卖出数量（全仓 / 减仓比例）              │
-│ 智能取价（买一 > 盘前/盘后/夜盘 > lastDone）             │
-│ 展示计划 → 人工确认（--auto-approve 跳过）               │
-│ 以阈值最低价提交 LO → 30s 超时未成交则跳过               │
-└─────────────────────────────────────────────────────────┘
-    ↓
-记录到 submitted_orders.json（防重复）
+analysis_history (DB)    Longbridge API          Longbridge API
+       │                 stockPositions()          todayOrders()
+       ▼                       ▼                        ▼
+   signals[]              holdings[]               activeOrders[]
+       │                       │                        │
+       └───────────┬───────────┴────────────────────────┘
+                   ▼
+            buildActionPlan()
+           (持仓 vs 信号对比)
+                   │
+                   ▼
+        逐个执行（致命错误终止，非致命跳过继续）
 ```
+
+**Action 类型**
+
+| Action | 条件 | 行为 |
+| --- | --- | --- |
+| `NEW_BUY` | 不持仓 + 信号=买入 + 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
+| `UPDATE_BUY` | 有 pending 买单 + 信号价格不一致 | `replaceOrder` 同步 |
+| `SELL_FULL` | 持仓 + 信号=卖出 | 取消 SL/TP → 限价卖出（挂买一） |
+| `SELL_PARTIAL` | 持仓 + 信号=减仓 | 取消 SL/TP → 限价卖 sellPct%（挂买一） |
+| `SYNC_SL_TP` | 持仓 + SL/TP 数量或价格 ≠ 信号 | `replaceOrder` 调整数量和/或价格 |
+| `RECOVER_SL_TP` | 持仓 + 无 SL/TP + 信号有止损止盈 | 补挂 MIT + LIT |
+| `HOLD` | 持仓 + SL/TP 已匹配 | 不操作 |
 
 ## 快速开始
 
@@ -71,7 +71,7 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 ``` bash
 pnpm trade # 人工确认模式
 pnpm trade --auto-approve # 全自动模式
-pnpm trade --dry-run # 试运行（不连接交易所）
+pnpm trade --dry-run # 试运行（连接交易所，仅展示行动计划，不实际下单）
 ```
 
 首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
@@ -87,7 +87,6 @@ docker run --rm \
   -e CLIENT_ID=your-client-id \
   -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
-  -v $(pwd)/data:/app/data \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade
 
@@ -96,15 +95,15 @@ docker run --rm \
   -e CLIENT_ID=your-client-id \
   -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
-  -v $(pwd)/data:/app/data \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --auto-approve
 
-# 试运行（不连接交易所）
+# 试运行（连接交易所，仅展示行动计划，不实际下单）
 docker run --rm \
+  -e CLIENT_ID=your-client-id \
   -e DB_PATH=/app/db/stock_analysis.db \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
-  -v $(pwd)/data:/app/data \
+  -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --dry-run
 
 ```
@@ -114,7 +113,6 @@ docker run --rm \
 | 容器路径            | 说明                                                                                                             |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `/app/db/`          | 包含 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis)项目的 `stock_analysis.db`（只读） |
-| `/app/data`         | 包含此项目的数据文件                                                                                             |
 | `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                                                                             |
 
 > **提示**：`DB_PATH` 与数据目录无关，指向你实际的 `stock_analysis.db` 即可。示例中用 `/app/db/` 只是约定，实际可挂载到任意路径。

@@ -33,3 +33,38 @@ export function toLongbridgeSymbol(code: string): string | null {
   // Rule 4: Everything else (6-digit A-shares, unknown formats)
   return null;
 }
+
+const A_SHARE_RE = /^[036]\d+$/;
+
+/**
+ * Check if a DB code is an A-share (6-digit starting with 0/3/6).
+ */
+export function isAShare(code: string): boolean {
+  return A_SHARE_RE.test(code.trim());
+}
+
+/**
+ * Reverse: extract symbol from remark like "auto-trade:buy:123" → undefined
+ * (remark doesn't contain symbol — this is a placeholder for future use).
+ * Mainly used to identify our auto-trade remarks.
+ */
+export function isAutoTradeRemark(remark: string): boolean {
+  return remark.startsWith("auto-trade:");
+}
+
+/**
+ * Parse role from remark string.
+ * "auto-trade:buy:123" → "buy", "auto-trade:sl:123" → "stop_loss", etc.
+ */
+export function parseRemarkRole(
+  remark: string,
+): "buy" | "sell" | "stop_loss" | "take_profit" | null {
+  if (!remark.startsWith("auto-trade:")) return null;
+  const parts = remark.split(":");
+  const tag = parts[1];
+  if (tag === "buy") return "buy";
+  if (tag === "sell" || tag === "reduce") return "sell";
+  if (tag === "sl") return "stop_loss";
+  if (tag === "tp") return "take_profit";
+  return null;
+}
