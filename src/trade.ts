@@ -6,7 +6,7 @@ import {
   pruneExpiredOrders,
   pruneStaleBuyOrders,
 } from "./lib/cleanup.js";
-import { queryAll } from "./lib/db.js";
+import { queryAll, WINDOW_HOURS } from "./lib/db.js";
 import { executeSellSignal, executeSignal, patchMissingSlTp } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { toLongbridgeSymbol } from "./lib/symbols.js";
@@ -108,13 +108,9 @@ async function main(): Promise<void> {
   // Dry-run: query DB and print signals without connecting to Longbridge
   if (isDryRun) {
     const submittedIds = getSubmittedRecordIds();
-    const {
-      buySignals,
-      sellSignals: sellRecords,
-      recentReports,
-    } = queryAll(dbPath, [...submittedIds]);
+    const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
     console.log(`🔍 [DRY RUN] 模拟运行，不会实际下单\n`);
-    console.log(`📊 最近 12 小时分析报告: ${recentReports.length} 条`);
+    console.log(`📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
     printDryRunSignals(buySignals, sellRecords, priceThresholdPct, positionPct);
     return;
   }
@@ -140,13 +136,9 @@ async function main(): Promise<void> {
 
   // Query DB once after cleanup (free'd signal IDs are now available)
   const submittedIds = getSubmittedRecordIds();
-  const {
-    buySignals,
-    sellSignals: sellRecords,
-    recentReports,
-  } = queryAll(dbPath, [...submittedIds]);
+  const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
 
-  console.log(`\n📊 最近 12 小时分析报告: ${recentReports.length} 条`);
+  console.log(`\n📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
 
   const signals: TradeSignal[] = [];
   for (const record of buySignals) {
