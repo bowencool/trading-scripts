@@ -17,7 +17,8 @@ function printDryRunSignals(
   buySignals: AnalysisRecord[],
   sellRecords: AnalysisRecord[],
   priceThresholdPct: number,
-  positionPct: number,
+  buyPct: number,
+  sellPct: number,
 ): void {
   const allSignals = [
     ...buySignals.map((r) => ({ record: r, side: "买入" as const })),
@@ -61,10 +62,12 @@ function printDryRunSignals(
       );
       if (record.stop_loss) console.log(`      止损: ${record.stop_loss} (MIT 市价触单)`);
       if (record.take_profit) console.log(`      止盈: ${record.take_profit} (LIT 限价触单)`);
-      console.log(`      仓位比例: ${positionPct}%（需连接 Longbridge 才能计算具体数量）`);
+      console.log(`      买入比例: ${buyPct}%（需连接 Longbridge 才能计算具体数量）`);
     } else if (side === "卖出" || side === "减仓") {
       console.log(`\n   📋 交易计划:`);
-      console.log(`      方向: ${side} | 模式: ${side === "减仓" ? "部分减仓" : "全部清仓"}`);
+      console.log(
+        `      方向: ${side} | 模式: ${side === "减仓" ? `部分减仓 ${sellPct}%` : "全部清仓"}`,
+      );
     } else {
       console.log(`\n   📋 交易计划:`);
       console.log(`      方向: ${side} | 目标价: ${record.ideal_buy ?? "-"}`);
@@ -93,15 +96,20 @@ async function main(): Promise<void> {
   }
 
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
-  const positionPct = Number(process.env.POSITION_PCT || "20");
+  const buyPct = Number(process.env.BUY_PCT || "15");
+  const sellPct = Number(process.env.SELL_PCT || "50");
   if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
     console.error(
       `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
     );
     process.exit(1);
   }
-  if (!Number.isFinite(positionPct) || positionPct <= 0 || positionPct > 100) {
-    console.error(`错误: POSITION_PCT 必须是 0-100 的正数，当前值: ${process.env.POSITION_PCT}`);
+  if (!Number.isFinite(buyPct) || buyPct <= 0 || buyPct > 100) {
+    console.error(`错误: BUY_PCT 必须是 0-100 的正数，当前值: ${process.env.BUY_PCT}`);
+    process.exit(1);
+  }
+  if (!Number.isFinite(sellPct) || sellPct <= 0 || sellPct > 100) {
+    console.error(`错误: SELL_PCT 必须是 0-100 的正数，当前值: ${process.env.SELL_PCT}`);
     process.exit(1);
   }
 
@@ -111,7 +119,7 @@ async function main(): Promise<void> {
     const submittedIds = getSubmittedRecordIds();
     const { buySignals, sellSignals: sellRecords, recentReports } = queryAll(dbPath, submittedIds);
     console.log(`📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
-    printDryRunSignals(buySignals, sellRecords, priceThresholdPct, positionPct);
+    printDryRunSignals(buySignals, sellRecords, priceThresholdPct, buyPct, sellPct);
     return;
   }
 
@@ -207,7 +215,8 @@ async function main(): Promise<void> {
     tradeCtx,
     orderWatcher,
     autoApprove: isAutoApprove,
-    positionPct,
+    buyPct,
+    sellPct,
     priceThresholdPct,
   };
   for (const signal of signals) {

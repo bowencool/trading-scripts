@@ -18,7 +18,8 @@ export interface ExecutorConfig {
   tradeCtx: TradeContext;
   orderWatcher: OrderWatcher;
   autoApprove: boolean;
-  positionPct: number;
+  buyPct: number;
+  sellPct: number;
   priceThresholdPct: number;
 }
 
@@ -159,8 +160,7 @@ export async function executeSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
 ): Promise<{ buyOrderId: string; stopLossOrderId?: string; takeProfitOrderId?: string } | null> {
-  const { quoteCtx, tradeCtx, orderWatcher, autoApprove, positionPct, priceThresholdPct } =
-    execConfig;
+  const { quoteCtx, tradeCtx, orderWatcher, autoApprove, buyPct, priceThresholdPct } = execConfig;
 
   // Display analysis record
   printAnalysisRecord(signal.record);
@@ -203,19 +203,19 @@ export async function executeSignal(
     return null;
   }
 
-  // Calculate quantity based on account net assets * positionPct%
+  // Calculate quantity based on account net assets * buyPct%
   const netAssets = balances.length > 0 ? Number(balances[0].netAssets.toString()) : 0;
   if (netAssets <= 0) {
     console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产（货币: ${currency}）`);
     return null;
   }
-  const maxPositionValue = (netAssets * positionPct) / 100;
+  const maxPositionValue = (netAssets * buyPct) / 100;
   // Use the higher of current price and target price to avoid over-sizing
   const sizingPrice = Math.max(currentPriceNum, signal.targetPrice);
   const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
   if (qty <= 0) {
     console.log(
-      `[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${positionPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
+      `[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${buyPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
     );
     return null;
   }
@@ -226,7 +226,7 @@ export async function executeSignal(
     `   标的: ${signal.symbol} | 当前价: ${currentPriceNum}（${priceSource}） | 目标价: ${signal.targetPrice}`,
   );
   console.log(
-    `   账户净资产: ${netAssets.toFixed(0)} ${currency} | 仓位比例: ${positionPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
+    `   账户净资产: ${netAssets.toFixed(0)} ${currency} | 买入比例: ${buyPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
   );
   console.log(
     `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
@@ -431,7 +431,7 @@ export async function executeSellSignal(
   execConfig: ExecutorConfig,
   signal: TradeSignal,
 ): Promise<{ sellOrderId: string } | null> {
-  const { tradeCtx, quoteCtx, autoApprove, positionPct } = execConfig;
+  const { tradeCtx, quoteCtx, autoApprove, sellPct } = execConfig;
   const isPartial = signal.sellMode === "reduce";
 
   // Display analysis record
@@ -462,10 +462,10 @@ export async function executeSellSignal(
   const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
   let sellQty: number;
   if (isPartial) {
-    // Reduce: sell positionPct% of available
-    const reduceQty = Math.floor((availableQty * positionPct) / 100 / lotSize) * lotSize;
+    // Reduce: sell sellPct% of available
+    const reduceQty = Math.floor((availableQty * sellPct) / 100 / lotSize) * lotSize;
     sellQty = reduceQty;
-    console.log(`📉 减仓模式: 可卖 ${availableQty} 股, 减持 ${positionPct}% = ${sellQty} 股`);
+    console.log(`📉 减仓模式: 可卖 ${availableQty} 股, 减持 ${sellPct}% = ${sellQty} 股`);
   } else {
     // Full exit: sell all available
     sellQty = availableQty;
