@@ -203,19 +203,21 @@ export async function executeSignal(
     return null;
   }
 
-  // Calculate quantity based on account net assets * buyPct%
-  const netAssets = balances.length > 0 ? Number(balances[0].netAssets.toString()) : 0;
-  if (netAssets <= 0) {
-    console.log(`[SKIP] ${signal.symbol} - 无法获取账户净资产（货币: ${currency}）`);
+  // Calculate quantity based on account buy power * buyPct%
+  // Use buyPower (购买力) instead of netAssets (净资产) to avoid overspending.
+  // netAssets includes margin/positions value, which can cause overdraft.
+  const buyPower = balances.length > 0 ? Number(balances[0].buyPower.toString()) : 0;
+  if (buyPower <= 0) {
+    console.log(`[SKIP] ${signal.symbol} - 账户购买力不足（货币: ${currency}）`);
     return null;
   }
-  const maxPositionValue = (netAssets * buyPct) / 100;
+  const maxPositionValue = (buyPower * buyPct) / 100;
   // Use the higher of current price and target price to avoid over-sizing
   const sizingPrice = Math.max(currentPriceNum, signal.targetPrice);
   const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
   if (qty <= 0) {
     console.log(
-      `[SKIP] ${signal.symbol} - 计算数量为 0（净资产 ${netAssets.toFixed(0)} ${currency} 的 ${buyPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
+      `[SKIP] ${signal.symbol} - 计算数量为 0（购买力 ${buyPower.toFixed(0)} ${currency} 的 ${buyPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
     );
     return null;
   }
@@ -226,7 +228,7 @@ export async function executeSignal(
     `   标的: ${signal.symbol} | 当前价: ${currentPriceNum}（${priceSource}） | 目标价: ${signal.targetPrice}`,
   );
   console.log(
-    `   账户净资产: ${netAssets.toFixed(0)} ${currency} | 买入比例: ${buyPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
+    `   账户购买力: ${buyPower.toFixed(0)} ${currency} | 买入比例: ${buyPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
   );
   console.log(
     `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
