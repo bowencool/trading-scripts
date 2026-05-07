@@ -1,5 +1,5 @@
 import { toLongbridgeSymbol } from "./symbols.js";
-import type { ActionPlan, AnalysisRecord, PortfolioState } from "./types.js";
+import type { ActionPlan, ActiveOrder, AnalysisRecord, PortfolioState } from "./types.js";
 
 /**
  * Compare portfolio state against DB signals and produce an action plan.
@@ -86,10 +86,118 @@ export function buildActionPlan(
     processedSymbols.add(symbol);
   }
 
-  // ── SL/TP reconciliation for held symbols ───────────────────────────────────
+  plans.push(...buildHeldSlTpPlans(portfolio, slTpRecords, processedSymbols));
+  return plans;
+}
+
+/**
+ * Build a startup SL/TP preflight plan for held symbols.
+ * Symbols with sell signals are skipped because their SL/TP will be cancelled
+ * in the sell phase anyway.
+ */
+export function buildPreflightPlan(
+  portfolio: PortfolioState,
+  sellSignals: AnalysisRecord[],
+  slTpRecords: Map<string, AnalysisRecord>,
+): ActionPlan[] {
+  const sellSymbols = new Set(
+    sellSignals
+      .map((record) => toLongbridgeSymbol(record.code))
+      .filter((symbol): symbol is string => Boolean(symbol)),
+  );
+
+  for (const symbol of sellSymbols) {
+    if (portfolio.holdings.has(symbol)) {
+      console.log(`[SKIP] ${symbol} 有卖出信号，预检查阶段不调整 SL/TP`);
+    }
+  }
+
+  return buildHeldSlTpPlans(portfolio, slTpRecords, sellSymbols);
+}
+
+/**
+ * Apply the expected preflight result to the in-memory portfolio state so
+ * dry-run can render the post-normalization trade plan without mutating live
+ * orders.
+ */
+export function projectPortfolioAfterPreflight(
+  portfolio: PortfolioState,
+  preflightPlans: ActionPlan[],
+): PortfolioState {
+  const projected: PortfolioState = {
+    holdings: new Map(
+      [...portfolio.holdings.entries()].map(([symbol, holding]) => [symbol, { ...holding }]),
+    ),
+    activeOrders: portfolio.activeOrders.map((order) => ({ ...order })),
+    orphanWarnings: [...portfolio.orphanWarnings],
+  };
+
+  for (const plan of preflightPlans) {
+    if (!plan.holding) continue;
+    const holding = plan.holding;
+
+    if (plan.action === "MERGE_SL_TP") {
+      projected.activeOrders = projected.activeOrders.filter(
+        (order) =>
+          !(
+            order.symbol === plan.symbol &&
+            (order.role === "stop_loss" || order.role === "take_profit")
+          ),
+      );
+      appendProjectedSlTpOrders(projected.activeOrders, plan.symbol, plan.record, holding.quantity);
+      projected.orphanWarnings = projected.orphanWarnings.filter(
+        (symbol) => symbol !== plan.symbol,
+      );
+      continue;
+    }
+
+    if (plan.action === "RECOVER_SL_TP") {
+      if (!plan.existingSlOrder && plan.record.stop_loss != null) {
+        projected.activeOrders.push(
+          makeProjectedOrder(plan.symbol, "stop_loss", plan.record, holding.quantity),
+        );
+      }
+      if (!plan.existingTpOrder && plan.record.take_profit != null) {
+        projected.activeOrders.push(
+          makeProjectedOrder(plan.symbol, "take_profit", plan.record, holding.quantity),
+        );
+      }
+      projected.orphanWarnings = projected.orphanWarnings.filter(
+        (symbol) => symbol !== plan.symbol,
+      );
+      continue;
+    }
+
+    if (plan.action === "SYNC_SL_TP") {
+      projected.activeOrders = projected.activeOrders.map((order) => {
+        if (plan.existingSlOrder && order.orderId === plan.existingSlOrder.orderId) {
+          return syncProjectedOrder(order, plan.record.stop_loss, holding.quantity);
+        }
+        if (plan.existingTpOrder && order.orderId === plan.existingTpOrder.orderId) {
+          return syncProjectedOrder(order, plan.record.take_profit, holding.quantity);
+        }
+        return order;
+      });
+      projected.orphanWarnings = projected.orphanWarnings.filter(
+        (symbol) => symbol !== plan.symbol,
+      );
+    }
+  }
+
+  return projected;
+}
+
+function buildHeldSlTpPlans(
+  portfolio: PortfolioState,
+  slTpRecords: Map<string, AnalysisRecord>,
+  skippedSymbols: Set<string>,
+): ActionPlan[] {
+  const plans: ActionPlan[] = [];
+
+  // ── SL/TP reconciliation for held symbols ─────────────────────────────────
 
   for (const [symbol, holding] of portfolio.holdings) {
-    if (processedSymbols.has(symbol)) continue; // Already handled above
+    if (skippedSymbols.has(symbol)) continue;
 
     const slOrders = portfolio.activeOrders.filter(
       (o) => o.symbol === symbol && o.role === "stop_loss",
@@ -101,16 +209,13 @@ export function buildActionPlan(
     const slTpRecord = slTpRecords.get(symbol);
 
     if (!slTpRecord) {
-      // No SL/TP signal available at all — just hold
-      plans.push({ action: "HOLD", symbol, record: makeDummyRecord(symbol, holding), holding });
+      plans.push({ action: "HOLD", symbol, record: makeDummyRecord(symbol), holding });
       continue;
     }
 
     const hasSl = slTpRecord.stop_loss != null;
     const hasTp = slTpRecord.take_profit != null;
 
-    // ── Duplicate SL/TP detection → MERGE_SL_TP ───────────────────────────
-    // If there are multiple SL or TP orders, cancel all and re-submit one pair
     const allSlTpOrders = [...slOrders, ...tpOrders];
     if (slOrders.length > 1 || tpOrders.length > 1) {
       console.log(
@@ -126,15 +231,10 @@ export function buildActionPlan(
       continue;
     }
 
-    // Existing SL/TP (take the first one if multiple)
     const existingSl = slOrders.length > 0 ? slOrders[0] : undefined;
     const existingTp = tpOrders.length > 0 ? tpOrders[0] : undefined;
 
-    // If no visible SL/TP orders for this symbol
     if (!existingSl && !existingTp) {
-      // Only RECOVER if this symbol was flagged as needing recovery
-      // (today's buy filled but SL/TP missing → likely crash)
-      // Cross-day holdings have GTC SL/TP that the API can't see → leave alone
       if (portfolio.orphanWarnings.includes(symbol) && (hasSl || hasTp)) {
         plans.push({
           action: "RECOVER_SL_TP",
@@ -148,13 +248,11 @@ export function buildActionPlan(
       continue;
     }
 
-    // Check if SL/TP quantity matches holding
     const existingSlQty = existingSl ? Number(existingSl.quantity) : 0;
     const existingTpQty = existingTp ? Number(existingTp.quantity) : 0;
     const slQtyMismatch = hasSl && existingSl && existingSlQty !== holding.quantity;
     const tpQtyMismatch = hasTp && existingTp && existingTpQty !== holding.quantity;
 
-    // Check if SL/TP prices match the signal
     const existingSlTrigger = existingSl ? Number(existingSl.triggerPrice) : 0;
     const existingTpTrigger = existingTp ? Number(existingTp.triggerPrice) : 0;
     const slPriceMismatch =
@@ -172,7 +270,6 @@ export function buildActionPlan(
       !slPriceMismatch &&
       !tpPriceMismatch
     ) {
-      // Everything matches
       plans.push({
         action: "HOLD",
         symbol,
@@ -188,7 +285,6 @@ export function buildActionPlan(
       (existingSl || existingTp) &&
       (slQtyMismatch || tpQtyMismatch || slPriceMismatch || tpPriceMismatch)
     ) {
-      // SL/TP exist but quantity or price doesn't match → SYNC
       plans.push({
         action: "SYNC_SL_TP",
         symbol,
@@ -200,7 +296,6 @@ export function buildActionPlan(
       continue;
     }
 
-    // Partial: has SL but not TP, or vice versa → RECOVER only if orphanWarning
     if (
       ((hasSl && !existingSl) || (hasTp && !existingTp)) &&
       portfolio.orphanWarnings.includes(symbol)
@@ -216,12 +311,13 @@ export function buildActionPlan(
       continue;
     }
 
-    // Fallback: hold
     plans.push({
       action: "HOLD",
       symbol,
       record: slTpRecord,
       holding,
+      existingSlOrder: existingSl,
+      existingTpOrder: existingTp,
     });
   }
 
@@ -232,10 +328,7 @@ export function buildActionPlan(
  * Create a minimal dummy AnalysisRecord for HOLD actions that don't have
  * a real signal record (e.g., held symbols without any DB signal).
  */
-function makeDummyRecord(
-  symbol: string,
-  _holding: { quantity: number; costPrice: number },
-): AnalysisRecord {
+function makeDummyRecord(symbol: string): AnalysisRecord {
   return {
     id: 0,
     query_id: null,
@@ -254,5 +347,58 @@ function makeDummyRecord(
     stop_loss: null,
     take_profit: null,
     created_at: new Date().toISOString(),
+  };
+}
+
+function makeProjectedOrder(
+  symbol: string,
+  role: "stop_loss" | "take_profit",
+  record: AnalysisRecord,
+  quantity: number,
+): ActiveOrder {
+  const trigger = role === "stop_loss" ? record.stop_loss : record.take_profit;
+
+  return {
+    orderId: "",
+    symbol,
+    side: "Sell",
+    orderType: role === "stop_loss" ? "MIT" : "LIT",
+    price: role === "take_profit" && trigger != null ? String(trigger) : "0",
+    triggerPrice: trigger != null ? String(trigger) : "0",
+    quantity: String(quantity),
+    status: "Projected",
+    role,
+    remark: role === "stop_loss" ? `auto-trade:sl:${record.id}` : `auto-trade:tp:${record.id}`,
+  };
+}
+
+function appendProjectedSlTpOrders(
+  activeOrders: ActiveOrder[],
+  symbol: string,
+  record: AnalysisRecord,
+  quantity: number,
+): void {
+  if (record.stop_loss != null) {
+    activeOrders.push(makeProjectedOrder(symbol, "stop_loss", record, quantity));
+  }
+  if (record.take_profit != null) {
+    activeOrders.push(makeProjectedOrder(symbol, "take_profit", record, quantity));
+  }
+}
+
+function syncProjectedOrder(
+  order: ActiveOrder,
+  trigger: number | null,
+  quantity: number,
+): ActiveOrder {
+  if (trigger == null) {
+    return order;
+  }
+
+  return {
+    ...order,
+    quantity: String(quantity),
+    triggerPrice: String(trigger),
+    price: order.role === "take_profit" ? String(trigger) : order.price,
   };
 }

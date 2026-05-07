@@ -1,4 +1,4 @@
-import { OrderSide, OrderStatus, type TradeContext } from "longbridge";
+import { OrderSide, OrderStatus, type TradeContext, TriggerStatus } from "longbridge";
 import { isAutoTradeRemark, parseRemarkRole } from "./symbols.js";
 import type { ActiveOrder as ActiveOrderParsed, Holding, PortfolioState } from "./types.js";
 
@@ -9,10 +9,21 @@ const HISTORY_DAYS = 30;
 const PENDING_STATUSES = new Set([
   OrderStatus.New,
   OrderStatus.NotReported,
+  OrderStatus.ReplacedNotReported,
+  OrderStatus.ProtectedNotReported,
+  OrderStatus.VarietiesNotReported,
+  OrderStatus.WaitToNew,
+  OrderStatus.WaitToReplace,
+  OrderStatus.PendingReplace,
   OrderStatus.PartialFilled,
+  OrderStatus.WaitToCancel,
+  OrderStatus.PendingCancel,
 ]);
 
-function isPending(status: OrderStatus): boolean {
+function isPending(status: OrderStatus, triggerStatus: TriggerStatus | null | undefined): boolean {
+  if (triggerStatus === TriggerStatus.Active) {
+    return true;
+  }
   return PENDING_STATUSES.has(status);
 }
 
@@ -35,6 +46,12 @@ function orderStatusName(status: OrderStatus): string {
       return "PartialFilled";
     case OrderStatus.NotReported:
       return "NotReported";
+    case OrderStatus.VarietiesNotReported:
+      return "VarietiesNotReported";
+    case OrderStatus.PendingReplace:
+      return "PendingReplace";
+    case OrderStatus.PendingCancel:
+      return "PendingCancel";
     default:
       return `Status(${status})`;
   }
@@ -49,9 +66,10 @@ function toActiveOrder(order: {
   triggerPrice: { toString(): string } | null;
   quantity: { toString(): string };
   status: OrderStatus;
+  triggerStatus: TriggerStatus | null;
   remark: string;
 }): ActiveOrderParsed | null {
-  if (!isPending(order.status)) return null;
+  if (!isPending(order.status, order.triggerStatus)) return null;
   const remark = order.remark ?? "";
   if (!isAutoTradeRemark(remark)) return null;
   const role = parseRemarkRole(remark);
@@ -103,7 +121,19 @@ export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<Portf
   const [todayOrders, historyOrdersResp] = await Promise.all([
     tradeCtx.todayOrders(),
     tradeCtx.historyOrders({
-      status: [OrderStatus.New, OrderStatus.NotReported, OrderStatus.PartialFilled],
+      status: [
+        OrderStatus.New,
+        OrderStatus.NotReported,
+        OrderStatus.ReplacedNotReported,
+        OrderStatus.ProtectedNotReported,
+        OrderStatus.VarietiesNotReported,
+        OrderStatus.WaitToNew,
+        OrderStatus.WaitToReplace,
+        OrderStatus.PendingReplace,
+        OrderStatus.PartialFilled,
+        OrderStatus.WaitToCancel,
+        OrderStatus.PendingCancel,
+      ],
       startAt,
       endAt,
     }),

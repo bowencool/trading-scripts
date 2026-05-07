@@ -3,6 +3,19 @@ import { isAutoTradeRemark, parseRemarkRole } from "./symbols.js";
 
 const API_DELAY_MS = 200;
 const HISTORY_DAYS = 30;
+const ACTIVE_HISTORY_STATUSES = [
+  OrderStatus.New,
+  OrderStatus.NotReported,
+  OrderStatus.ReplacedNotReported,
+  OrderStatus.ProtectedNotReported,
+  OrderStatus.VarietiesNotReported,
+  OrderStatus.WaitToNew,
+  OrderStatus.WaitToReplace,
+  OrderStatus.PendingReplace,
+  OrderStatus.PartialFilled,
+  OrderStatus.WaitToCancel,
+  OrderStatus.PendingCancel,
+];
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -35,7 +48,7 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     tradeCtx.stockPositions(),
     tradeCtx.todayOrders(),
     tradeCtx.historyOrders({
-      status: [OrderStatus.New, OrderStatus.NotReported, OrderStatus.PartialFilled],
+      status: ACTIVE_HISTORY_STATUSES,
       startAt,
       endAt,
     }),

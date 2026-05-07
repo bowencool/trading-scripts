@@ -12,6 +12,7 @@
 - **智能取价**：优先使用盘口深度（卖一/买一），其次盘前/盘后/夜盘价格，最后 `lastDone`
 - 买入信号：以阈值最高价（目标价 × (1 + 阈值%)）提交限价单 (LO)，10 秒超时未成交则跳过
 - 卖出信号：以买一价提交限价单 (LO)，支持全仓卖出和按比例减仓；卖出前取消 SL/TP，失败时自动回滚
+- **启动前 SL/TP 预检查**：开盘前先检查持仓的止损止盈单，自动合并重复挂单并按最新信号价格同步
 - SL/TP 自动同步：持仓数量或信号价格变化时自动调整挂单
 - SL/TP 自动补挂：持仓但无止损止盈时，从 24h 内信号（或最近记录）中恢复
 - 孤儿订单清理：基于 `todayOrders()` API 自动撤销无父订单的 SL/TP + OCO 互斥清理
@@ -26,6 +27,10 @@ analysis_history (DB)    Longbridge API          Longbridge API
    signals[]              holdings[]               activeOrders[]
        │                       │                        │
        └───────────┬───────────┴────────────────────────┘
+                   ▼
+          preflight SL/TP check
+        (merge / sync / recover)
+                   │
                    ▼
             buildActionPlan()
            (持仓 vs 信号对比)
@@ -44,6 +49,7 @@ analysis_history (DB)    Longbridge API          Longbridge API
 | `SELL_PARTIAL` | 持仓 + 信号=减仓 | 取消 SL/TP → 限价卖 sellPct%（挂买一） |
 | `SYNC_SL_TP` | 持仓 + SL/TP 数量或价格 ≠ 信号 | `replaceOrder` 调整数量和/或价格 |
 | `RECOVER_SL_TP` | 持仓 + 无 SL/TP + 信号有止损止盈 | 补挂 MIT + LIT |
+| `MERGE_SL_TP` | 持仓 + 同侧有多张止损/止盈挂单 | 先撤重复单，再按最新信号重挂一对 |
 | `HOLD` | 持仓 + SL/TP 已匹配 | 不操作 |
 
 ## 快速开始
@@ -71,7 +77,7 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 ``` bash
 pnpm trade # 人工确认模式
 pnpm trade --auto-approve # 全自动模式
-pnpm trade --dry-run # 试运行（连接交易所，仅展示行动计划，不实际下单）
+pnpm trade --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 ```
 
 首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
@@ -98,7 +104,7 @@ docker run --rm \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --auto-approve
 
-# 试运行（连接交易所，仅展示行动计划，不实际下单）
+# 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
   -e DB_PATH=/app/db/stock_analysis.db \

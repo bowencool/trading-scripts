@@ -1,7 +1,11 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
 import { cleanupOrphanedOrders } from "./lib/cleanup.js";
-import { buildActionPlan } from "./lib/comparator.js";
+import {
+  buildActionPlan,
+  buildPreflightPlan,
+  projectPortfolioAfterPreflight,
+} from "./lib/comparator.js";
 import { queryAll, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
 import { executeAction, FatalError } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
@@ -21,16 +25,16 @@ const ACTION_LABEL: Record<ActionKind, string> = {
   HOLD: "⏸️  持仓匹配",
 };
 
-function printActionPlan(plans: ActionPlan[]): void {
+function printActionPlan(title: string, plans: ActionPlan[]): void {
   if (plans.length === 0) {
-    console.log("没有符合条件的交易信号。");
+    console.log(`\n📋 ${title}: 无操作\n`);
     return;
   }
 
   const actionPlans = plans.filter((p) => p.action !== "HOLD");
   const holdPlans = plans.filter((p) => p.action === "HOLD");
 
-  console.log(`\n📋 行动计划: ${actionPlans.length} 个操作 + ${holdPlans.length} 个持仓跳过\n`);
+  console.log(`\n📋 ${title}: ${actionPlans.length} 个操作 + ${holdPlans.length} 个持仓跳过\n`);
 
   for (const plan of plans) {
     const { symbol, record, action } = plan;
@@ -59,13 +63,13 @@ function printActionPlan(plans: ActionPlan[]): void {
 
     if (plan.existingSlOrder) {
       console.log(
-        `   现有止损: ${plan.existingSlOrder.orderId} @ ${plan.existingSlOrder.triggerPrice}`,
+        `   现有止损: ${plan.existingSlOrder.orderId || "(预期新单)"} @ ${plan.existingSlOrder.triggerPrice}`,
       );
     }
 
     if (plan.existingTpOrder) {
       console.log(
-        `   现有止盈: ${plan.existingTpOrder.orderId} @ ${plan.existingTpOrder.triggerPrice}`,
+        `   现有止盈: ${plan.existingTpOrder.orderId || "(预期新单)"} @ ${plan.existingTpOrder.triggerPrice}`,
       );
     }
 
@@ -152,30 +156,28 @@ async function main(): Promise<void> {
     }
   }
 
-  // 5. Build action plan
-  const actionPlan = buildActionPlan(portfolio, buySignals, sellSignals, slTpRecords);
+  // 5. Build startup preflight plan
+  const preflightPlan = buildPreflightPlan(portfolio, sellSignals, slTpRecords);
+  printActionPlan("启动前预检查", preflightPlan);
 
-  // 6. Display action plan
-  printActionPlan(actionPlan);
-
-  // 7. Dry-run stops here — no execution
+  // 6. Dry-run renders the post-preflight trade plan and stops
   if (isDryRun) {
-    console.log("\n🔍 [DRY RUN] 行动计划展示完毕，未执行任何操作。");
+    const projectedPortfolio = projectPortfolioAfterPreflight(portfolio, preflightPlan);
+    const dryRunActionPlan = buildActionPlan(
+      projectedPortfolio,
+      buySignals,
+      sellSignals,
+      slTpRecords,
+    );
+    printActionPlan("交易行动计划", dryRunActionPlan);
+    console.log("\n🔍 [DRY RUN] 预检查与交易计划展示完毕，未执行任何操作。");
     return;
   }
 
-  const actionable = actionPlan.filter((p) => p.action !== "HOLD");
-
-  if (actionable.length === 0) {
-    console.log("没有需要执行的操作。");
-    return;
-  }
-
-  // 8. Start WebSocket order push listener
+  // 7. Start WebSocket order push listener once for the full run
   const orderWatcher = new OrderWatcher(tradeCtx);
   await orderWatcher.start();
 
-  // 9. Execute each action serially
   const execConfig = {
     quoteCtx,
     tradeCtx,
@@ -186,7 +188,10 @@ async function main(): Promise<void> {
     priceThresholdPct,
   };
 
-  for (const plan of actionable) {
+  let finalPortfolio = portfolio;
+  const actionablePreflight = preflightPlan.filter((p) => p.action !== "HOLD");
+
+  for (const plan of actionablePreflight) {
     try {
       await executeAction(execConfig, plan);
     } catch (err) {
@@ -196,6 +201,37 @@ async function main(): Promise<void> {
       }
       console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
       // Non-fatal: continue with next plan
+    }
+  }
+
+  if (actionablePreflight.length > 0) {
+    console.log("\n🔄 预检查执行完成，刷新持仓和活跃订单...");
+    finalPortfolio = await fetchPortfolioState(tradeCtx);
+    console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
+  }
+
+  // 8. Build and display final trade plan from post-preflight portfolio
+  const actionPlan = buildActionPlan(finalPortfolio, buySignals, sellSignals, slTpRecords);
+  printActionPlan("交易行动计划", actionPlan);
+
+  const actionable = actionPlan.filter((p) => p.action !== "HOLD");
+
+  if (actionable.length === 0) {
+    await orderWatcher.stop();
+    console.log("没有需要执行的操作。");
+    return;
+  }
+
+  // 9. Execute each trade action serially
+  for (const plan of actionable) {
+    try {
+      await executeAction(execConfig, plan);
+    } catch (err) {
+      if (err instanceof FatalError) {
+        console.error(`[FATAL] ${err.message} — 终止后续执行`);
+        break;
+      }
+      console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
     }
   }
 
