@@ -1,9 +1,10 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
 import {
+  buildCleanupActionsFromSnapshot,
   type CleanupAction,
-  collectCleanupActions,
   executeCleanupActions,
+  fetchCleanupSnapshot,
   formatCleanupAction,
 } from "./lib/cleanup.js";
 import {
@@ -15,7 +16,7 @@ import { promptConfirm } from "./lib/confirm.js";
 import { queryAll, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
 import { executeAction, FatalError } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
-import { fetchPortfolioState } from "./lib/portfolio.js";
+import { buildPortfolioStateFromSnapshot, fetchPortfolioState } from "./lib/portfolio.js";
 import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
 // ── Display ───────────────────────────────────────────────────────────────────
@@ -154,13 +155,16 @@ async function main(): Promise<void> {
 
   // 1. Preview or execute orphan cleanup
   console.log("🧹 清理孤儿订单...");
-  const cleanupActions = await collectCleanupActions(tradeCtx);
+  const cleanupSnapshot = await fetchCleanupSnapshot(tradeCtx);
+  const cleanupActions = buildCleanupActionsFromSnapshot(cleanupSnapshot);
+  let shouldReuseCleanupSnapshot = true;
   if (isDryRun) {
     printStartupCleanupPreview(cleanupActions, "dry-run");
   } else if (cleanupActions.length === 0) {
     console.log("✅ 无孤儿订单");
   } else if (isAutoApprove) {
     await executeCleanupActions(tradeCtx, cleanupActions);
+    shouldReuseCleanupSnapshot = false;
   } else {
     printStartupCleanupPreview(cleanupActions, "plan");
     const confirmed = await promptConfirm(
@@ -168,6 +172,7 @@ async function main(): Promise<void> {
     );
     if (confirmed) {
       await executeCleanupActions(tradeCtx, cleanupActions);
+      shouldReuseCleanupSnapshot = false;
     } else {
       console.log("[SKIP] 用户取消启动前孤儿订单清理");
     }
@@ -175,7 +180,13 @@ async function main(): Promise<void> {
 
   // 2. Fetch portfolio state (holdings + active orders)
   console.log("\n📊 获取持仓和活跃订单...");
-  const portfolio = await fetchPortfolioState(tradeCtx);
+  const portfolio = shouldReuseCleanupSnapshot
+    ? buildPortfolioStateFromSnapshot({
+        positionsResp: cleanupSnapshot.positionsResp,
+        todayOrders: cleanupSnapshot.todayOrders,
+        historyOrdersResp: cleanupSnapshot.historyActiveOrders,
+      })
+    : await fetchPortfolioState(tradeCtx);
 
   console.log(`\n📊 持仓: ${portfolio.holdings.size} 只`);
   for (const [symbol, holding] of portfolio.holdings) {

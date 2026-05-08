@@ -20,6 +20,12 @@ const PENDING_STATUSES = new Set([
   OrderStatus.PendingCancel,
 ]);
 
+export interface PortfolioSnapshot {
+  positionsResp: Awaited<ReturnType<TradeContext["stockPositions"]>>;
+  todayOrders: Awaited<ReturnType<TradeContext["todayOrders"]>>;
+  historyOrdersResp: Awaited<ReturnType<TradeContext["historyOrders"]>>;
+}
+
 function isPending(status: OrderStatus, triggerStatus: TriggerStatus | null | undefined): boolean {
   if (triggerStatus === TriggerStatus.Active) {
     return true;
@@ -90,15 +96,14 @@ function toActiveOrder(order: {
 }
 
 /**
- * Fetch current portfolio state from Longbridge API:
+ * Build portfolio state from prefetched Longbridge responses:
  * - Holdings via stockPositions()
  * - Active orders via todayOrders() + historyOrders() (for GTC SL/TP)
  * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
  *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
  */
-export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<PortfolioState> {
-  // 1. Fetch holdings
-  const positionsResp = await tradeCtx.stockPositions();
+export function buildPortfolioStateFromSnapshot(snapshot: PortfolioSnapshot): PortfolioState {
+  const { positionsResp, todayOrders, historyOrdersResp } = snapshot;
   const allPositions = positionsResp.channels.flatMap((ch) => ch.positions);
 
   const holdings = new Map<string, Holding>();
@@ -113,31 +118,6 @@ export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<Portf
       costPrice: Number(pos.costPrice.toString()),
     });
   }
-
-  // 2. Fetch today's orders + history GTC pending orders
-  const endAt = new Date();
-  const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
-
-  const [todayOrders, historyOrdersResp] = await Promise.all([
-    tradeCtx.todayOrders(),
-    tradeCtx.historyOrders({
-      status: [
-        OrderStatus.New,
-        OrderStatus.NotReported,
-        OrderStatus.ReplacedNotReported,
-        OrderStatus.ProtectedNotReported,
-        OrderStatus.VarietiesNotReported,
-        OrderStatus.WaitToNew,
-        OrderStatus.WaitToReplace,
-        OrderStatus.PendingReplace,
-        OrderStatus.PartialFilled,
-        OrderStatus.WaitToCancel,
-        OrderStatus.PendingCancel,
-      ],
-      startAt,
-      endAt,
-    }),
-  ]);
 
   const activeOrders: ActiveOrderParsed[] = [];
   const seenOrderIds = new Set<string>();
@@ -202,4 +182,45 @@ export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<Portf
   }
 
   return { holdings, activeOrders, orphanWarnings };
+}
+
+/**
+ * Fetch current portfolio state from Longbridge API:
+ * - Holdings via stockPositions()
+ * - Active orders via todayOrders() + historyOrders() (for GTC SL/TP)
+ * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
+ *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
+ */
+export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<PortfolioState> {
+  const positionsResp = await tradeCtx.stockPositions();
+
+  const endAt = new Date();
+  const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
+
+  const [todayOrders, historyOrdersResp] = await Promise.all([
+    tradeCtx.todayOrders(),
+    tradeCtx.historyOrders({
+      status: [
+        OrderStatus.New,
+        OrderStatus.NotReported,
+        OrderStatus.ReplacedNotReported,
+        OrderStatus.ProtectedNotReported,
+        OrderStatus.VarietiesNotReported,
+        OrderStatus.WaitToNew,
+        OrderStatus.WaitToReplace,
+        OrderStatus.PendingReplace,
+        OrderStatus.PartialFilled,
+        OrderStatus.WaitToCancel,
+        OrderStatus.PendingCancel,
+      ],
+      startAt,
+      endAt,
+    }),
+  ]);
+
+  return buildPortfolioStateFromSnapshot({
+    positionsResp,
+    todayOrders,
+    historyOrdersResp,
+  });
 }

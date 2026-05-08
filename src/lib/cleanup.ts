@@ -41,6 +41,13 @@ interface CleanupOrderLike extends OcoOrderLike {
   symbol: string;
 }
 
+export interface CleanupSnapshot {
+  positionsResp: Awaited<ReturnType<TradeContext["stockPositions"]>>;
+  todayOrders: Awaited<ReturnType<TradeContext["todayOrders"]>>;
+  historyActiveOrders: Awaited<ReturnType<TradeContext["historyOrders"]>>;
+  historyFilledOrders: Awaited<ReturnType<TradeContext["historyOrders"]>>;
+}
+
 export interface CleanupAction {
   kind: "orphan" | "oco";
   orderId: string;
@@ -193,28 +200,11 @@ export function buildCleanupActions<T extends CleanupOrderLike>(
   return [...actionsByOrderId.values()];
 }
 
-async function fetchCleanupSnapshot(tradeCtx: TradeContext): Promise<{
+function normalizeCleanupSnapshot(snapshot: CleanupSnapshot): {
   heldSymbols: Set<string>;
   orders: CleanupOrderLike[];
-}> {
-  const endAt = new Date();
-  const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
-
-  const [positionsResp, todayOrders, historyActiveOrdersResp, historyFilledOrdersResp] =
-    await Promise.all([
-      tradeCtx.stockPositions(),
-      tradeCtx.todayOrders(),
-      tradeCtx.historyOrders({
-        status: ACTIVE_HISTORY_STATUSES,
-        startAt,
-        endAt,
-      }),
-      tradeCtx.historyOrders({
-        status: FILLED_HISTORY_STATUSES,
-        startAt,
-        endAt,
-      }),
-    ]);
+} {
+  const { positionsResp, todayOrders, historyActiveOrders, historyFilledOrders } = snapshot;
 
   const heldSymbols = new Set<string>();
   for (const pos of positionsResp.channels.flatMap((channel) => channel.positions)) {
@@ -231,13 +221,13 @@ async function fetchCleanupSnapshot(tradeCtx: TradeContext): Promise<{
       seenIds.add(order.orderId);
     }
   }
-  for (const order of historyActiveOrdersResp) {
+  for (const order of historyActiveOrders) {
     if (!seenIds.has(order.orderId)) {
       allOrders.push(order);
       seenIds.add(order.orderId);
     }
   }
-  for (const order of historyFilledOrdersResp) {
+  for (const order of historyFilledOrders) {
     if (!seenIds.has(order.orderId)) {
       allOrders.push(order);
       seenIds.add(order.orderId);
@@ -250,9 +240,47 @@ async function fetchCleanupSnapshot(tradeCtx: TradeContext): Promise<{
   };
 }
 
+export async function fetchCleanupSnapshot(tradeCtx: TradeContext): Promise<CleanupSnapshot> {
+  const endAt = new Date();
+  const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
+
+  // Longbridge is sensitive to request bursts. Keep the preview path
+  // sequential so dry-run does not trip the rate limiter before doing any work.
+  const positionsResp = await tradeCtx.stockPositions();
+  await delay(API_DELAY_MS);
+
+  const todayOrders = await tradeCtx.todayOrders();
+  await delay(API_DELAY_MS);
+
+  const historyActiveOrders = await tradeCtx.historyOrders({
+    status: ACTIVE_HISTORY_STATUSES,
+    startAt,
+    endAt,
+  });
+  await delay(API_DELAY_MS);
+
+  const historyFilledOrders = await tradeCtx.historyOrders({
+    status: FILLED_HISTORY_STATUSES,
+    startAt,
+    endAt,
+  });
+
+  return {
+    positionsResp,
+    todayOrders,
+    historyActiveOrders,
+    historyFilledOrders,
+  };
+}
+
+export function buildCleanupActionsFromSnapshot(snapshot: CleanupSnapshot): CleanupAction[] {
+  const normalized = normalizeCleanupSnapshot(snapshot);
+  return buildCleanupActions(normalized.heldSymbols, normalized.orders);
+}
+
 export async function collectCleanupActions(tradeCtx: TradeContext): Promise<CleanupAction[]> {
   const snapshot = await fetchCleanupSnapshot(tradeCtx);
-  return buildCleanupActions(snapshot.heldSymbols, snapshot.orders);
+  return buildCleanupActionsFromSnapshot(snapshot);
 }
 
 export async function executeCleanupActions(
@@ -291,6 +319,7 @@ export async function executeCleanupActions(
  */
 export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
   console.log("🧹 清理孤儿订单...");
-  const actions = await collectCleanupActions(tradeCtx);
+  const snapshot = await fetchCleanupSnapshot(tradeCtx);
+  const actions = buildCleanupActionsFromSnapshot(snapshot);
   await executeCleanupActions(tradeCtx, actions);
 }

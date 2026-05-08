@@ -55,4 +55,4 @@ created_at (DateTime, default=datetime.now, index)
 
 ## 注意事项
 
-- 代码中调用 API 有时候是顺序调用，是因为 API 会限制调用频率，所以不用优化
+- 代码中调用 API 要顺序调用，是因为 API 会限制调用频率，已有代码也不用优化
