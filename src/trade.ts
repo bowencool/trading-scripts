@@ -151,6 +151,9 @@ async function main(): Promise<void> {
   const existingSlTpOrders = portfolio.activeOrders.filter(
     (order) => order.role === "stop_loss" || order.role === "take_profit",
   );
+  const existingWorkingOrders = portfolio.activeOrders.filter(
+    (order) => order.role !== "stop_loss" && order.role !== "take_profit",
+  );
   if (existingSlTpOrders.length > 0) {
     console.log(`📊 现存 SL/TP 订单: ${existingSlTpOrders.length} 个`);
     for (const order of existingSlTpOrders) {
@@ -158,6 +161,15 @@ async function main(): Promise<void> {
       const price = order.role === "stop_loss" ? order.triggerPrice : order.price;
       console.log(
         `   ${order.symbol}: ${label} ${order.orderId} @ ${price} | 数量 ${order.quantity} | 状态 ${order.status}`,
+      );
+    }
+  }
+  if (existingWorkingOrders.length > 0) {
+    console.log(`📊 活跃未成交普通订单: ${existingWorkingOrders.length} 个`);
+    for (const order of existingWorkingOrders) {
+      const label = order.role === "buy" ? "买单" : "卖单";
+      console.log(
+        `   ${order.symbol}: ${label} ${order.orderId} @ ${order.price} | 数量 ${order.quantity} | 状态 ${order.status}`,
       );
     }
   }
