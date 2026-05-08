@@ -59,6 +59,7 @@ export interface PortfolioState {
 // ── Action plan ───────────────────────────────────────────────────────────────
 
 export type ActionKind =
+  | "CANCEL_CONFLICTING_ORDERS"
   | "NEW_BUY"
   | "UPDATE_BUY"
   | "SELL_FULL"
@@ -83,6 +84,6 @@ export interface ActionPlan {
   existingTpOrder?: ActiveOrder;
   /** For SELL_PARTIAL: percentage to sell. */
   sellPct?: number;
-  /** For MERGE_SL_TP: all duplicate SL/TP orders to cancel before re-submitting. */
+  /** Orders to cancel before continuing (conflicting pending orders or duplicate SL/TP). */
   ordersToCancel?: ActiveOrder[];
 }

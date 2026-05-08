@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildActionPlan } from "./comparator.js";
+import { buildActionPlan, buildPreflightPlan } from "./comparator.js";
 import type { ActiveOrder, AnalysisRecord, PortfolioState } from "./types.js";
 
 function makeRecord(overrides: Partial<AnalysisRecord> = {}): AnalysisRecord {
@@ -79,5 +79,109 @@ test("buildActionPlan includes existing SL/TP orders on sell actions", () => {
   assert.deepEqual(
     plan.ordersToCancel?.map((order) => order.orderId),
     ["ord-1", "ord-2"],
+  );
+});
+
+test("buildActionPlan does not update a pending buy when the threshold price already matches", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map(),
+    activeOrders: [
+      makeOrder({
+        orderId: "buy-1",
+        side: "Buy",
+        orderType: "LO",
+        price: "102",
+        triggerPrice: "0",
+        quantity: "100",
+        role: "buy",
+        remark: "auto-trade:buy:1",
+      }),
+    ],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(
+    portfolio,
+    [makeRecord({ operation_advice: "买入", trend_prediction: "看多" })],
+    [],
+    new Map(),
+    2,
+  );
+
+  assert.equal(plans.length, 0);
+});
+
+test("buildPreflightPlan cancels a stale pending buy when the latest signal turns sell", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map(),
+    activeOrders: [
+      makeOrder({
+        orderId: "buy-1",
+        side: "Buy",
+        orderType: "LO",
+        price: "100",
+        triggerPrice: "0",
+        quantity: "100",
+        role: "buy",
+        remark: "auto-trade:buy:1",
+      }),
+    ],
+    orphanWarnings: [],
+  };
+
+  const plans = buildPreflightPlan(
+    portfolio,
+    [],
+    [makeRecord({ operation_advice: "卖出" })],
+    new Map(),
+  );
+
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.action, "CANCEL_CONFLICTING_ORDERS");
+  assert.deepEqual(
+    plans[0]?.ordersToCancel?.map((order) => order.orderId),
+    ["buy-1"],
+  );
+});
+
+test("buildPreflightPlan cancels a stale pending sell when the latest signal turns buy", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map([
+      [
+        "AAPL.US",
+        {
+          symbol: "AAPL.US",
+          quantity: 100,
+          availableQuantity: 0,
+          costPrice: 98,
+        },
+      ],
+    ]),
+    activeOrders: [
+      makeOrder({
+        orderId: "sell-1",
+        orderType: "LO",
+        price: "105",
+        triggerPrice: "0",
+        quantity: "100",
+        role: "sell",
+        remark: "auto-trade:sell:1",
+      }),
+    ],
+    orphanWarnings: [],
+  };
+
+  const plans = buildPreflightPlan(
+    portfolio,
+    [makeRecord({ operation_advice: "买入", trend_prediction: "看多" })],
+    [],
+    new Map(),
+  );
+
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.action, "CANCEL_CONFLICTING_ORDERS");
+  assert.deepEqual(
+    plans[0]?.ordersToCancel?.map((order) => order.orderId),
+    ["sell-1"],
   );
 });

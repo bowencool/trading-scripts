@@ -15,6 +15,7 @@ import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 // ── Display ───────────────────────────────────────────────────────────────────
 
 const ACTION_LABEL: Record<ActionKind, string> = {
+  CANCEL_CONFLICTING_ORDERS: "🚫 取消冲突挂单",
   NEW_BUY: "🆕 新建买入",
   UPDATE_BUY: "🔄 更新买单",
   SELL_FULL: "📉 全仓卖出",
@@ -58,6 +59,12 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
     if (plan.pendingBuyOrder) {
       console.log(
         `   Pending 买单: ${plan.pendingBuyOrder.orderId} @ ${plan.pendingBuyOrder.price}`,
+      );
+    }
+
+    if (plan.action === "CANCEL_CONFLICTING_ORDERS" && plan.ordersToCancel) {
+      console.log(
+        `   冲突挂单: ${plan.ordersToCancel.map((order) => `${order.orderId}(${order.role})`).join(", ")}`,
       );
     }
 
@@ -141,6 +148,20 @@ async function main(): Promise<void> {
   }
   console.log(`📊 活跃订单: ${portfolio.activeOrders.length} 个`);
 
+  const existingSlTpOrders = portfolio.activeOrders.filter(
+    (order) => order.role === "stop_loss" || order.role === "take_profit",
+  );
+  if (existingSlTpOrders.length > 0) {
+    console.log(`📊 现存 SL/TP 订单: ${existingSlTpOrders.length} 个`);
+    for (const order of existingSlTpOrders) {
+      const label = order.role === "stop_loss" ? "止损" : "止盈";
+      const price = order.role === "stop_loss" ? order.triggerPrice : order.price;
+      console.log(
+        `   ${order.symbol}: ${label} ${order.orderId} @ ${price} | 数量 ${order.quantity} | 状态 ${order.status}`,
+      );
+    }
+  }
+
   // 3. Query DB signals
   const { buySignals, sellSignals, recentReports } = queryAll(dbPath);
   console.log(`\n📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
@@ -157,7 +178,7 @@ async function main(): Promise<void> {
   }
 
   // 5. Build startup preflight plan
-  const preflightPlan = buildPreflightPlan(portfolio, sellSignals, slTpRecords);
+  const preflightPlan = buildPreflightPlan(portfolio, buySignals, sellSignals, slTpRecords);
   printActionPlan("启动前预检查", preflightPlan);
 
   // 6. Dry-run renders the post-preflight trade plan and stops
@@ -168,6 +189,7 @@ async function main(): Promise<void> {
       buySignals,
       sellSignals,
       slTpRecords,
+      priceThresholdPct,
     );
     printActionPlan("交易行动计划", dryRunActionPlan);
     console.log("\n🔍 [DRY RUN] 预检查与交易计划展示完毕，未执行任何操作。");
@@ -211,7 +233,13 @@ async function main(): Promise<void> {
   }
 
   // 8. Build and display final trade plan from post-preflight portfolio
-  const actionPlan = buildActionPlan(finalPortfolio, buySignals, sellSignals, slTpRecords);
+  const actionPlan = buildActionPlan(
+    finalPortfolio,
+    buySignals,
+    sellSignals,
+    slTpRecords,
+    priceThresholdPct,
+  );
   printActionPlan("交易行动计划", actionPlan);
 
   const actionable = actionPlan.filter((p) => p.action !== "HOLD");

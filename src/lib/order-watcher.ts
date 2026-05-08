@@ -16,6 +16,7 @@ const CANCEL_PUSH_GRACE_MS = 10_000;
  */
 export class OrderWatcher {
   private pending = new Map<string, PendingOrder>();
+  private terminalEvents = new Map<string, PushOrderChanged>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private started = false;
 
@@ -48,6 +49,7 @@ export class OrderWatcher {
       resolve({ orderId: "", status: OrderStatus.Canceled } as PushOrderChanged);
     }
     this.pending.clear();
+    this.terminalEvents.clear();
     for (const t of this.timers.values()) {
       clearTimeout(t);
     }
@@ -59,6 +61,12 @@ export class OrderWatcher {
    * @param timeoutMs If set, automatically cancel the order after this many ms.
    */
   waitForTerminal(orderId: string, timeoutMs?: number): Promise<PushOrderChanged> {
+    const cached = this.terminalEvents.get(orderId);
+    if (cached) {
+      this.terminalEvents.delete(orderId);
+      return Promise.resolve(cached);
+    }
+
     return new Promise<PushOrderChanged>((resolve) => {
       this.pending.set(orderId, { resolve });
 
@@ -94,8 +102,13 @@ export class OrderWatcher {
   private handleChange(event: PushOrderChanged): void {
     const orderId = event.orderId;
 
-    if (isTerminal(event.status) && this.pending.has(orderId)) {
-      this.resolvePending(orderId, event);
+    if (isTerminal(event.status)) {
+      if (this.pending.has(orderId)) {
+        this.resolvePending(orderId, event);
+        return;
+      }
+
+      this.terminalEvents.set(orderId, event);
     }
   }
 

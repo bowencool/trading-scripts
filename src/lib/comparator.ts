@@ -1,3 +1,4 @@
+import { computeBuyLimitPrice } from "./pricing.js";
 import { toLongbridgeSymbol } from "./symbols.js";
 import type { ActionPlan, ActiveOrder, AnalysisRecord, PortfolioState } from "./types.js";
 
@@ -14,9 +15,17 @@ export function buildActionPlan(
   buySignals: AnalysisRecord[],
   sellSignals: AnalysisRecord[],
   slTpRecords: Map<string, AnalysisRecord>,
+  priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2"),
 ): ActionPlan[] {
   const plans: ActionPlan[] = [];
-  const processedSymbols = new Set<string>();
+  const { plans: conflictPlans, conflictSymbols } = buildConflictingPendingOrderPlans(
+    portfolio,
+    buySignals,
+    sellSignals,
+  );
+  plans.push(...conflictPlans);
+
+  const processedSymbols = new Set<string>(conflictSymbols);
 
   // ── Buy signals ─────────────────────────────────────────────────────────────
 
@@ -26,22 +35,25 @@ export function buildActionPlan(
       console.log(`[SKIP] ${record.code} 无法映射到 Longbridge symbol`);
       continue;
     }
+    if (processedSymbols.has(symbol)) {
+      continue;
+    }
 
     const holding = portfolio.holdings.get(symbol);
     const pendingBuy = portfolio.activeOrders.find((o) => o.symbol === symbol && o.role === "buy");
 
     if (holding) {
       console.log(`[SKIP] ${symbol} 已持仓 ${holding.quantity} 股，跳过买入信号`);
-      processedSymbols.add(symbol);
       continue;
     }
 
     if (pendingBuy) {
-      // Check if price/qty need updating
+      // Check if limit price needs updating.
       // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
       const targetPrice = record.ideal_buy!;
+      const threshold = computeBuyLimitPrice(targetPrice, priceThresholdPct);
       const pendingPrice = Number(pendingBuy.price);
-      if (Math.abs(pendingPrice - targetPrice) / targetPrice > 0.001) {
+      if (Math.abs(pendingPrice - threshold) / threshold > 0.001) {
         plans.push({
           action: "UPDATE_BUY",
           symbol,
@@ -49,7 +61,7 @@ export function buildActionPlan(
           pendingBuyOrder: pendingBuy,
         });
       } else {
-        console.log(`[HOLD] ${symbol} pending 买单价格已匹配 (${pendingPrice})，跳过`);
+        console.log(`[HOLD] ${symbol} pending 买单价格已匹配阈值价 (${pendingPrice})，跳过`);
       }
       processedSymbols.add(symbol);
       continue;
@@ -65,6 +77,9 @@ export function buildActionPlan(
     const symbol = toLongbridgeSymbol(record.code);
     if (!symbol) {
       console.log(`[SKIP] ${record.code} 无法映射到 Longbridge symbol`);
+      continue;
+    }
+    if (processedSymbols.has(symbol)) {
       continue;
     }
 
@@ -107,9 +122,15 @@ export function buildActionPlan(
  */
 export function buildPreflightPlan(
   portfolio: PortfolioState,
+  buySignals: AnalysisRecord[],
   sellSignals: AnalysisRecord[],
   slTpRecords: Map<string, AnalysisRecord>,
 ): ActionPlan[] {
+  const { plans: conflictPlans, conflictSymbols } = buildConflictingPendingOrderPlans(
+    portfolio,
+    buySignals,
+    sellSignals,
+  );
   const sellSymbols = new Set(
     sellSignals
       .map((record) => toLongbridgeSymbol(record.code))
@@ -122,7 +143,8 @@ export function buildPreflightPlan(
     }
   }
 
-  return buildHeldSlTpPlans(portfolio, slTpRecords, sellSymbols);
+  const skippedSymbols = new Set([...sellSymbols, ...conflictSymbols]);
+  return [...conflictPlans, ...buildHeldSlTpPlans(portfolio, slTpRecords, skippedSymbols)];
 }
 
 /**
@@ -143,6 +165,14 @@ export function projectPortfolioAfterPreflight(
   };
 
   for (const plan of preflightPlans) {
+    if (plan.action === "CANCEL_CONFLICTING_ORDERS") {
+      const orderIds = new Set((plan.ordersToCancel ?? []).map((order) => order.orderId));
+      projected.activeOrders = projected.activeOrders.filter(
+        (order) => !orderIds.has(order.orderId),
+      );
+      continue;
+    }
+
     if (!plan.holding) continue;
     const holding = plan.holding;
 
@@ -332,6 +362,75 @@ function buildHeldSlTpPlans(
   }
 
   return plans;
+}
+
+function buildConflictingPendingOrderPlans(
+  portfolio: PortfolioState,
+  buySignals: AnalysisRecord[],
+  sellSignals: AnalysisRecord[],
+): {
+  plans: ActionPlan[];
+  conflictSymbols: Set<string>;
+} {
+  const buySignalsBySymbol = new Map<string, AnalysisRecord>();
+  const sellSignalsBySymbol = new Map<string, AnalysisRecord>();
+
+  for (const record of buySignals) {
+    const symbol = toLongbridgeSymbol(record.code);
+    if (symbol) {
+      buySignalsBySymbol.set(symbol, record);
+    }
+  }
+
+  for (const record of sellSignals) {
+    const symbol = toLongbridgeSymbol(record.code);
+    if (symbol) {
+      sellSignalsBySymbol.set(symbol, record);
+    }
+  }
+
+  const grouped = new Map<string, { record: AnalysisRecord; orders: ActiveOrder[] }>();
+
+  for (const order of portfolio.activeOrders) {
+    let record: AnalysisRecord | undefined;
+    if (order.role === "buy") {
+      record = sellSignalsBySymbol.get(order.symbol);
+    } else if (order.role === "sell") {
+      record = buySignalsBySymbol.get(order.symbol);
+    } else {
+      continue;
+    }
+
+    if (!record) {
+      continue;
+    }
+
+    const existing = grouped.get(order.symbol);
+    if (existing) {
+      existing.orders.push(order);
+      continue;
+    }
+
+    grouped.set(order.symbol, { record, orders: [order] });
+  }
+
+  const plans: ActionPlan[] = [];
+  const conflictSymbols = new Set<string>();
+
+  for (const [symbol, { record, orders }] of grouped) {
+    console.log(
+      `[CANCEL] ${symbol} 最新信号为 ${record.operation_advice ?? "-"}，取消冲突挂单 ${orders.map((order) => order.orderId).join(", ")}`,
+    );
+    plans.push({
+      action: "CANCEL_CONFLICTING_ORDERS",
+      symbol,
+      record,
+      ordersToCancel: orders,
+    });
+    conflictSymbols.add(symbol);
+  }
+
+  return { plans, conflictSymbols };
 }
 
 /**

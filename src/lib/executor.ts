@@ -9,6 +9,7 @@ import {
   type TradeContext,
 } from "longbridge";
 import type { OrderWatcher } from "./order-watcher.js";
+import { computeBuyLimitPrice } from "./pricing.js";
 import type { ActionPlan, ActiveOrder, AnalysisRecord } from "./types.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -193,7 +194,7 @@ async function executeNewBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<voi
     return;
   }
 
-  const threshold = Number((targetPrice * (1 + priceThresholdPct / 100)).toFixed(2));
+  const threshold = computeBuyLimitPrice(targetPrice, priceThresholdPct);
   if (currentPriceNum > threshold) {
     console.log(`[SKIP] ${symbol} - 当前价 ${currentPriceNum} 超出阈值上限 ${threshold}`);
     return;
@@ -205,7 +206,7 @@ async function executeNewBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<voi
     return;
   }
   const maxPositionValue = (buyPower * buyPct) / 100;
-  const sizingPrice = Math.max(currentPriceNum, targetPrice);
+  const sizingPrice = threshold;
   const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
   if (qty <= 0) {
     console.log(
@@ -291,7 +292,7 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
 
   printAnalysisRecord(record);
 
-  const threshold = Number((targetPrice * (1 + priceThresholdPct / 100)).toFixed(2));
+  const threshold = computeBuyLimitPrice(targetPrice, priceThresholdPct);
   const pendingPrice = Number(pendingBuyOrder.price);
   const pendingQty = Number(pendingBuyOrder.quantity);
 
@@ -319,6 +320,48 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
     console.log(`[OK] 买单 ${pendingBuyOrder.orderId} 已更新价格为 ${threshold}`);
   } catch (err) {
     console.error(`[ERR] 更新买单 ${pendingBuyOrder.orderId} 失败: ${err}`);
+  }
+}
+
+async function executeCancelConflictingOrders(
+  cfg: ExecutorConfig,
+  plan: ActionPlan,
+): Promise<void> {
+  const { tradeCtx, autoApprove } = cfg;
+  const ordersToCancel = dedupeOrdersById(plan.ordersToCancel ?? []);
+
+  if (ordersToCancel.length === 0) {
+    console.log(`[SKIP] ${plan.symbol} - 无冲突挂单需要取消`);
+    return;
+  }
+
+  printAnalysisRecord(plan.record);
+
+  console.log(`\n📋 冲突挂单清理 [CANCEL_CONFLICTING_ORDERS]:`);
+  console.log(`   标的: ${plan.symbol} | 最新信号: ${plan.record.operation_advice ?? "-"}`);
+  for (const order of ordersToCancel) {
+    console.log(
+      `   取消挂单: ${order.orderId} | 角色: ${order.role} | 价格: ${order.price} | 数量: ${order.quantity}`,
+    );
+  }
+
+  if (!autoApprove) {
+    const confirmed = await promptConfirm(
+      `\n确认取消 ${ordersToCancel.length} 个冲突挂单？(Enter 确认 / Esc 取消): `,
+    );
+    if (!confirmed) {
+      console.log("[SKIP] 用户取消");
+      return;
+    }
+  }
+
+  for (const order of ordersToCancel) {
+    try {
+      await tradeCtx.cancelOrder(order.orderId);
+      console.log(`[CANCEL] 已取消冲突挂单 ${order.orderId} (${order.role})`);
+    } catch (err) {
+      console.error(`[ERR] 取消冲突挂单 ${order.orderId} 失败: ${err}`);
+    }
   }
 }
 
@@ -778,6 +821,9 @@ export function getRemainingPositionQuantity(
  */
 export async function executeAction(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> {
   switch (plan.action) {
+    case "CANCEL_CONFLICTING_ORDERS":
+      await executeCancelConflictingOrders(cfg, plan);
+      break;
     case "NEW_BUY":
       await executeNewBuy(cfg, plan);
       break;
