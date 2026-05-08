@@ -1,11 +1,17 @@
 import { QuoteContext, TradeContext } from "longbridge";
 import { buildConfig } from "./lib/auth.js";
-import { cleanupOrphanedOrders } from "./lib/cleanup.js";
+import {
+  type CleanupAction,
+  collectCleanupActions,
+  executeCleanupActions,
+  formatCleanupAction,
+} from "./lib/cleanup.js";
 import {
   buildActionPlan,
   buildPreflightPlan,
   projectPortfolioAfterPreflight,
 } from "./lib/comparator.js";
+import { promptConfirm } from "./lib/confirm.js";
 import { queryAll, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
 import { executeAction, FatalError } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
@@ -25,6 +31,21 @@ const ACTION_LABEL: Record<ActionKind, string> = {
   MERGE_SL_TP: "🔗 合并重复 SL/TP",
   HOLD: "⏸️  持仓匹配",
 };
+
+function printStartupCleanupPreview(actions: CleanupAction[], mode: "plan" | "dry-run"): void {
+  if (actions.length === 0) {
+    console.log(mode === "dry-run" ? "✅ [DRY RUN] 无孤儿订单" : "✅ 无孤儿订单");
+    return;
+  }
+
+  for (const action of actions) {
+    console.log(formatCleanupAction(action, mode));
+  }
+
+  const suffix = mode === "dry-run" ? "待清理订单" : "待确认清理订单";
+  const prefix = mode === "dry-run" ? "✅ [DRY RUN]" : "📋";
+  console.log(`${prefix} 共发现 ${actions.length} 个${suffix}`);
+}
 
 function printActionPlan(title: string, plans: ActionPlan[]): void {
   if (plans.length === 0) {
@@ -131,9 +152,25 @@ async function main(): Promise<void> {
   const quoteCtx = QuoteContext.new(config);
   const tradeCtx = TradeContext.new(config);
 
-  // 1. Clean up orphaned orders (skip in dry-run to avoid side effects)
-  if (!isDryRun) {
-    await cleanupOrphanedOrders(tradeCtx);
+  // 1. Preview or execute orphan cleanup
+  console.log("🧹 清理孤儿订单...");
+  const cleanupActions = await collectCleanupActions(tradeCtx);
+  if (isDryRun) {
+    printStartupCleanupPreview(cleanupActions, "dry-run");
+  } else if (cleanupActions.length === 0) {
+    console.log("✅ 无孤儿订单");
+  } else if (isAutoApprove) {
+    await executeCleanupActions(tradeCtx, cleanupActions);
+  } else {
+    printStartupCleanupPreview(cleanupActions, "plan");
+    const confirmed = await promptConfirm(
+      `\n确认执行启动前孤儿订单清理？(Enter 确认 / Esc 取消): `,
+    );
+    if (confirmed) {
+      await executeCleanupActions(tradeCtx, cleanupActions);
+    } else {
+      console.log("[SKIP] 用户取消启动前孤儿订单清理");
+    }
   }
 
   // 2. Fetch portfolio state (holdings + active orders)

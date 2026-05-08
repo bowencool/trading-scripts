@@ -37,6 +37,18 @@ interface OcoOrderLike {
   remark?: string | null;
 }
 
+interface CleanupOrderLike extends OcoOrderLike {
+  symbol: string;
+}
+
+export interface CleanupAction {
+  kind: "orphan" | "oco";
+  orderId: string;
+  symbol: string;
+  role: "stop_loss" | "take_profit";
+  recordId: string | null;
+}
+
 export function selectOcoOrdersToCancel<T extends OcoOrderLike>(orders: T[]): T[] {
   const filledRolesByRecordId = new Map<string, Set<"stop_loss" | "take_profit">>();
 
@@ -85,22 +97,109 @@ export function selectOcoOrdersToCancel<T extends OcoOrderLike>(orders: T[]): T[
   return selected;
 }
 
-/**
- * Clean up orphaned orders based on portfolio state + todayOrders() + historyOrders():
- *
- * 1. **Orphan SL/TP**: symbol has SL/TP but NO holding AND no pending buy → cancel
- *    (uses stockPositions() so cross-day filled buys are correctly detected)
- * 2. **OCO cleanup**: SL filled but TP still active (or vice versa) → cancel the other
- */
-export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
-  console.log("🧹 清理孤儿订单...");
+function roleLabel(role: CleanupAction["role"]): string {
+  return role === "stop_loss" ? "止损" : "止盈";
+}
 
+function ocoCause(role: CleanupAction["role"]): string {
+  return role === "take_profit" ? "止损已成交" : "止盈已成交";
+}
+
+export function formatCleanupAction(
+  action: CleanupAction,
+  mode: "plan" | "dry-run" | "execute",
+): string {
+  const label = roleLabel(action.role);
+  const recordId = action.recordId ?? "?";
+  const prefix = mode === "dry-run" ? "[DRY RUN]" : mode === "plan" ? "[PLAN]" : "";
+
+  if (action.kind === "orphan") {
+    const verb = mode === "execute" ? "已取消" : "将取消";
+    return `${prefix}[CANCEL] ${verb}孤儿${label}订单 ${action.orderId} (${action.symbol} 无持仓)`;
+  }
+
+  const cause = ocoCause(action.role);
+  if (mode === "execute") {
+    return `[OCO] ${cause}，取消${label} ${action.orderId} (${action.symbol}, record ${recordId})`;
+  }
+  return `${prefix}[OCO] ${cause}，将取消${label} ${action.orderId} (${action.symbol}, record ${recordId})`;
+}
+
+export function buildCleanupActions<T extends CleanupOrderLike>(
+  heldSymbols: Set<string>,
+  orders: T[],
+): CleanupAction[] {
+  const bySymbol = new Map<string, T[]>();
+  for (const order of orders) {
+    const existing = bySymbol.get(order.symbol) ?? [];
+    existing.push(order);
+    bySymbol.set(order.symbol, existing);
+  }
+
+  const actionsByOrderId = new Map<string, CleanupAction>();
+
+  for (const [symbol, symbolOrders] of bySymbol) {
+    const allSlOrders = symbolOrders.filter(
+      (order) => parseRemarkRole(order.remark ?? "") === "stop_loss",
+    );
+    const allTpOrders = symbolOrders.filter(
+      (order) => parseRemarkRole(order.remark ?? "") === "take_profit",
+    );
+    const activeSlOrders = allSlOrders.filter((order) => !isTerminal(order.status));
+    const activeTpOrders = allTpOrders.filter((order) => !isTerminal(order.status));
+
+    if (activeSlOrders.length > 0 || activeTpOrders.length > 0) {
+      const hasHolding = heldSymbols.has(symbol);
+      const hasPendingBuy = symbolOrders.some(
+        (order) => parseRemarkRole(order.remark ?? "") === "buy" && !isTerminal(order.status),
+      );
+
+      if (!hasHolding && !hasPendingBuy) {
+        for (const order of [...activeSlOrders, ...activeTpOrders]) {
+          const role = parseRemarkRole(order.remark ?? "");
+          if (role !== "stop_loss" && role !== "take_profit") {
+            continue;
+          }
+          actionsByOrderId.set(order.orderId, {
+            kind: "orphan",
+            orderId: order.orderId,
+            symbol,
+            role,
+            recordId: parseRemarkRecordId(order.remark ?? ""),
+          });
+        }
+      }
+    }
+
+    const ocoOrdersToCancel = selectOcoOrdersToCancel(symbolOrders);
+    for (const order of ocoOrdersToCancel) {
+      if (actionsByOrderId.has(order.orderId)) {
+        continue;
+      }
+      const role = parseRemarkRole(order.remark ?? "");
+      if (role !== "stop_loss" && role !== "take_profit") {
+        continue;
+      }
+      actionsByOrderId.set(order.orderId, {
+        kind: "oco",
+        orderId: order.orderId,
+        symbol,
+        role,
+        recordId: parseRemarkRecordId(order.remark ?? ""),
+      });
+    }
+  }
+
+  return [...actionsByOrderId.values()];
+}
+
+async function fetchCleanupSnapshot(tradeCtx: TradeContext): Promise<{
+  heldSymbols: Set<string>;
+  orders: CleanupOrderLike[];
+}> {
   const endAt = new Date();
   const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
 
-  // Fetch holdings, today's orders, history pending orders, and filled history
-  // in parallel. Filled history is only used to determine whether the opposite
-  // side of an OCO pair has already completed.
   const [positionsResp, todayOrders, historyActiveOrdersResp, historyFilledOrdersResp] =
     await Promise.all([
       tradeCtx.stockPositions(),
@@ -118,15 +217,14 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     ]);
 
   const heldSymbols = new Set<string>();
-  for (const pos of positionsResp.channels.flatMap((ch) => ch.positions)) {
+  for (const pos of positionsResp.channels.flatMap((channel) => channel.positions)) {
     if (Number(pos.quantity.toString()) > 0) {
       heldSymbols.add(pos.symbol);
     }
   }
 
-  // Merge today's + history orders, dedup by orderId (today takes priority)
   const seenIds = new Set<string>();
-  const allOrders: typeof todayOrders = [];
+  const allOrders: CleanupOrderLike[] = [];
   for (const order of todayOrders) {
     if (!seenIds.has(order.orderId)) {
       allOrders.push(order);
@@ -146,65 +244,33 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
     }
   }
 
-  const ourOrders = allOrders.filter((o) => isAutoTradeRemark(o.remark ?? ""));
+  return {
+    heldSymbols,
+    orders: allOrders.filter((order) => isAutoTradeRemark(order.remark ?? "")),
+  };
+}
 
-  // Group orders by symbol
-  const bySymbol = new Map<string, typeof ourOrders>();
-  for (const order of ourOrders) {
-    const existing = bySymbol.get(order.symbol) ?? [];
-    existing.push(order);
-    bySymbol.set(order.symbol, existing);
-  }
+export async function collectCleanupActions(tradeCtx: TradeContext): Promise<CleanupAction[]> {
+  const snapshot = await fetchCleanupSnapshot(tradeCtx);
+  return buildCleanupActions(snapshot.heldSymbols, snapshot.orders);
+}
 
+export async function executeCleanupActions(
+  tradeCtx: TradeContext,
+  actions: CleanupAction[],
+): Promise<number> {
   let cleaned = 0;
 
-  for (const [symbol, orders] of bySymbol) {
-    const allSlOrders = orders.filter((o) => parseRemarkRole(o.remark ?? "") === "stop_loss");
-    const allTpOrders = orders.filter((o) => parseRemarkRole(o.remark ?? "") === "take_profit");
-    const activeSlOrders = allSlOrders.filter((o) => !isTerminal(o.status));
-    const activeTpOrders = allTpOrders.filter((o) => !isTerminal(o.status));
-
-    // 1. Orphan cleanup: cancel SL/TP only if symbol is NOT held AND no pending buy
-    if (activeSlOrders.length > 0 || activeTpOrders.length > 0) {
-      const hasHolding = heldSymbols.has(symbol);
-      const hasPendingBuy = orders.some(
-        (o) => parseRemarkRole(o.remark ?? "") === "buy" && !isTerminal(o.status),
-      );
-
-      if (!hasHolding && !hasPendingBuy) {
-        for (const slTp of [...activeSlOrders, ...activeTpOrders]) {
-          try {
-            await tradeCtx.cancelOrder(slTp.orderId);
-            const role = parseRemarkRole(slTp.remark ?? "") === "stop_loss" ? "止损" : "止盈";
-            console.log(`[CANCEL] 已取消孤儿${role}订单 ${slTp.orderId} (${symbol} 无持仓)`);
-            cleaned++;
-          } catch (err) {
-            console.error(`[WARN] 取消订单 ${slTp.orderId} 失败: ${err}`);
-          }
-          await delay(API_DELAY_MS);
-        }
-      }
+  for (const action of actions) {
+    try {
+      await tradeCtx.cancelOrder(action.orderId);
+      console.log(formatCleanupAction(action, "execute"));
+      cleaned++;
+    } catch (err) {
+      const label = roleLabel(action.role);
+      console.error(`[WARN] 取消${label} ${action.orderId} 失败: ${err}`);
     }
-
-    // 2. OCO cleanup: only cancel the opposite order from the same signal record
-    const ocoOrdersToCancel = selectOcoOrdersToCancel(orders);
-
-    for (const order of ocoOrdersToCancel) {
-      const role = parseRemarkRole(order.remark ?? "");
-      const recordId = parseRemarkRecordId(order.remark ?? "") ?? "?";
-      const label = role === "take_profit" ? "止盈" : role === "stop_loss" ? "止损" : "订单";
-      const cause = role === "take_profit" ? "止损已成交" : "止盈已成交";
-      try {
-        await tradeCtx.cancelOrder(order.orderId);
-        console.log(
-          `[OCO] ${cause}，取消${label} ${order.orderId} (${symbol}, record ${recordId})`,
-        );
-        cleaned++;
-      } catch (err) {
-        console.error(`[WARN] 取消${label} ${order.orderId} 失败: ${err}`);
-      }
-      await delay(API_DELAY_MS);
-    }
+    await delay(API_DELAY_MS);
   }
 
   if (cleaned > 0) {
@@ -212,4 +278,19 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
   } else {
     console.log("✅ 无孤儿订单");
   }
+
+  return cleaned;
+}
+
+/**
+ * Clean up orphaned orders based on portfolio state + todayOrders() + historyOrders():
+ *
+ * 1. **Orphan SL/TP**: symbol has SL/TP but NO holding AND no pending buy → cancel
+ *    (uses stockPositions() so cross-day filled buys are correctly detected)
+ * 2. **OCO cleanup**: SL filled but TP still active (or vice versa) → cancel the other
+ */
+export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<void> {
+  console.log("🧹 清理孤儿订单...");
+  const actions = await collectCleanupActions(tradeCtx);
+  await executeCleanupActions(tradeCtx, actions);
 }
