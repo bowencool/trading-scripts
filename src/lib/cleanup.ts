@@ -16,6 +16,7 @@ const ACTIVE_HISTORY_STATUSES = [
   OrderStatus.WaitToCancel,
   OrderStatus.PendingCancel,
 ];
+const FILLED_HISTORY_STATUSES = [OrderStatus.Filled];
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -97,16 +98,24 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
   const endAt = new Date();
   const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
 
-  // Fetch holdings, today's orders, and history pending orders in parallel
-  const [positionsResp, todayOrders, historyOrdersResp] = await Promise.all([
-    tradeCtx.stockPositions(),
-    tradeCtx.todayOrders(),
-    tradeCtx.historyOrders({
-      status: ACTIVE_HISTORY_STATUSES,
-      startAt,
-      endAt,
-    }),
-  ]);
+  // Fetch holdings, today's orders, history pending orders, and filled history
+  // in parallel. Filled history is only used to determine whether the opposite
+  // side of an OCO pair has already completed.
+  const [positionsResp, todayOrders, historyActiveOrdersResp, historyFilledOrdersResp] =
+    await Promise.all([
+      tradeCtx.stockPositions(),
+      tradeCtx.todayOrders(),
+      tradeCtx.historyOrders({
+        status: ACTIVE_HISTORY_STATUSES,
+        startAt,
+        endAt,
+      }),
+      tradeCtx.historyOrders({
+        status: FILLED_HISTORY_STATUSES,
+        startAt,
+        endAt,
+      }),
+    ]);
 
   const heldSymbols = new Set<string>();
   for (const pos of positionsResp.channels.flatMap((ch) => ch.positions)) {
@@ -124,7 +133,13 @@ export async function cleanupOrphanedOrders(tradeCtx: TradeContext): Promise<voi
       seenIds.add(order.orderId);
     }
   }
-  for (const order of historyOrdersResp) {
+  for (const order of historyActiveOrdersResp) {
+    if (!seenIds.has(order.orderId)) {
+      allOrders.push(order);
+      seenIds.add(order.orderId);
+    }
+  }
+  for (const order of historyFilledOrdersResp) {
     if (!seenIds.has(order.orderId)) {
       allOrders.push(order);
       seenIds.add(order.orderId);
