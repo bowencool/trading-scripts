@@ -4,6 +4,7 @@ import { OrderStatus } from "longbridge";
 import {
   buildCleanupActions,
   collectCleanupActions,
+  collectCompletedBuySignalRecordIdsFromSnapshot,
   executeCleanupActions,
   formatCleanupAction,
   selectOcoOrdersToCancel,
@@ -223,6 +224,58 @@ test("collectCleanupActions uses filled history to identify orphaned OCO orders"
   ]);
   assert.equal(historyCalls.length, 2);
   assert.ok(historyCalls.some((call) => call.status.includes(OrderStatus.Filled)));
+});
+
+test("collectCompletedBuySignalRecordIdsFromSnapshot only keeps filled SL/TP record ids", () => {
+  const recordIds = collectCompletedBuySignalRecordIdsFromSnapshot({
+    positionsResp: { channels: [] },
+    todayOrders: [
+      {
+        orderId: "tp-today",
+        symbol: "NVDA.US",
+        status: OrderStatus.Filled,
+        remark: "auto-trade:tp:888",
+      },
+      {
+        orderId: "buy-filled",
+        symbol: "NVDA.US",
+        status: OrderStatus.Filled,
+        remark: "auto-trade:buy:777",
+      },
+      {
+        orderId: "tp-pending",
+        symbol: "NVDA.US",
+        status: OrderStatus.New,
+        remark: "auto-trade:tp:666",
+      },
+    ],
+    historyActiveOrders: [],
+    historyFilledOrders: [
+      {
+        orderId: "sl-history",
+        symbol: "AAPL.US",
+        status: OrderStatus.Filled,
+        remark: "auto-trade:sl:555",
+      },
+      {
+        orderId: "tp-malformed",
+        symbol: "AAPL.US",
+        status: OrderStatus.Filled,
+        remark: "auto-trade:tp:not-a-number",
+      },
+      {
+        orderId: "tp-duplicate",
+        symbol: "NVDA.US",
+        status: OrderStatus.Filled,
+        remark: "auto-trade:tp:888",
+      },
+    ],
+  } as never);
+
+  assert.deepEqual(
+    [...recordIds].sort((a, b) => a - b),
+    [555, 888],
+  );
 });
 
 test("executeCleanupActions cancels only the supplied actions", async () => {

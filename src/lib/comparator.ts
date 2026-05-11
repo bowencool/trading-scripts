@@ -16,12 +16,14 @@ export function buildActionPlan(
   sellSignals: AnalysisRecord[],
   slTpRecords: Map<string, AnalysisRecord>,
   priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2"),
+  completedBuySignalRecordIds: ReadonlySet<number> = new Set<number>(),
 ): ActionPlan[] {
   const plans: ActionPlan[] = [];
   const { plans: conflictPlans, conflictSymbols } = buildConflictingPendingOrderPlans(
     portfolio,
     buySignals,
     sellSignals,
+    completedBuySignalRecordIds,
   );
   plans.push(...conflictPlans);
 
@@ -36,6 +38,11 @@ export function buildActionPlan(
       continue;
     }
     if (processedSymbols.has(symbol)) {
+      continue;
+    }
+    if (completedBuySignalRecordIds.has(record.id)) {
+      console.log(`[SKIP] ${symbol} 买入信号 record ${record.id} 已由止盈/止损完结，跳过重复买入`);
+      processedSymbols.add(symbol);
       continue;
     }
 
@@ -125,11 +132,13 @@ export function buildPreflightPlan(
   buySignals: AnalysisRecord[],
   sellSignals: AnalysisRecord[],
   slTpRecords: Map<string, AnalysisRecord>,
+  completedBuySignalRecordIds: ReadonlySet<number> = new Set<number>(),
 ): ActionPlan[] {
   const { plans: conflictPlans, conflictSymbols } = buildConflictingPendingOrderPlans(
     portfolio,
     buySignals,
     sellSignals,
+    completedBuySignalRecordIds,
   );
   const sellSymbols = new Set(
     sellSignals
@@ -368,6 +377,7 @@ function buildConflictingPendingOrderPlans(
   portfolio: PortfolioState,
   buySignals: AnalysisRecord[],
   sellSignals: AnalysisRecord[],
+  completedBuySignalRecordIds: ReadonlySet<number>,
 ): {
   plans: ActionPlan[];
   conflictSymbols: Set<string>;
@@ -376,6 +386,9 @@ function buildConflictingPendingOrderPlans(
   const sellSignalsBySymbol = new Map<string, AnalysisRecord>();
 
   for (const record of buySignals) {
+    if (completedBuySignalRecordIds.has(record.id)) {
+      continue;
+    }
     const symbol = toLongbridgeSymbol(record.code);
     if (symbol) {
       buySignalsBySymbol.set(symbol, record);

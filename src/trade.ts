@@ -3,6 +3,7 @@ import { buildConfig } from "./lib/auth.js";
 import {
   buildCleanupActionsFromSnapshot,
   type CleanupAction,
+  collectCompletedBuySignalRecordIdsFromSnapshot,
   executeCleanupActions,
   fetchCleanupSnapshot,
   formatCleanupAction,
@@ -157,6 +158,8 @@ async function main(): Promise<void> {
   console.log("🧹 清理孤儿订单...");
   const cleanupSnapshot = await fetchCleanupSnapshot(tradeCtx);
   const cleanupActions = buildCleanupActionsFromSnapshot(cleanupSnapshot);
+  const completedBuySignalRecordIds =
+    collectCompletedBuySignalRecordIdsFromSnapshot(cleanupSnapshot);
   let shouldReuseCleanupSnapshot = true;
   if (isDryRun) {
     printStartupCleanupPreview(cleanupActions, "dry-run");
@@ -238,7 +241,13 @@ async function main(): Promise<void> {
   }
 
   // 5. Build startup preflight plan
-  const preflightPlan = buildPreflightPlan(portfolio, buySignals, sellSignals, slTpRecords);
+  const preflightPlan = buildPreflightPlan(
+    portfolio,
+    buySignals,
+    sellSignals,
+    slTpRecords,
+    completedBuySignalRecordIds,
+  );
   printActionPlan("启动前预检查", preflightPlan);
 
   // 6. Dry-run renders the post-preflight trade plan and stops
@@ -250,6 +259,7 @@ async function main(): Promise<void> {
       sellSignals,
       slTpRecords,
       priceThresholdPct,
+      completedBuySignalRecordIds,
     );
     printActionPlan("交易行动计划", dryRunActionPlan);
     console.log("\n🔍 [DRY RUN] 预检查与交易计划展示完毕，未执行任何操作。");
@@ -299,6 +309,7 @@ async function main(): Promise<void> {
     sellSignals,
     slTpRecords,
     priceThresholdPct,
+    completedBuySignalRecordIds,
   );
   printActionPlan("交易行动计划", actionPlan);
 

@@ -111,6 +111,46 @@ test("buildActionPlan does not update a pending buy when the threshold price alr
   assert.equal(plans.length, 0);
 });
 
+test("buildActionPlan skips a completed buy signal when its record id already hit SL/TP", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map(),
+    activeOrders: [],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(
+    portfolio,
+    [makeRecord({ id: 88, operation_advice: "买入", trend_prediction: "看多" })],
+    [],
+    new Map(),
+    2,
+    new Set([88]),
+  );
+
+  assert.equal(plans.length, 0);
+});
+
+test("buildActionPlan still buys when only an older record id was completed", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map(),
+    activeOrders: [],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(
+    portfolio,
+    [makeRecord({ id: 99, operation_advice: "买入", trend_prediction: "看多" })],
+    [],
+    new Map(),
+    2,
+    new Set([88]),
+  );
+
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.action, "NEW_BUY");
+  assert.equal(plans[0]?.record.id, 99);
+});
+
 test("buildPreflightPlan cancels a stale pending buy when the latest signal turns sell", () => {
   const portfolio: PortfolioState = {
     holdings: new Map(),

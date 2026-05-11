@@ -278,6 +278,33 @@ export function buildCleanupActionsFromSnapshot(snapshot: CleanupSnapshot): Clea
   return buildCleanupActions(normalized.heldSymbols, normalized.orders);
 }
 
+export function collectCompletedBuySignalRecordIdsFromSnapshot(
+  snapshot: CleanupSnapshot,
+): Set<number> {
+  const completedRecordIds = new Set<number>();
+  const filledOrders = [...snapshot.todayOrders, ...snapshot.historyFilledOrders];
+
+  for (const order of filledOrders) {
+    if (order.status !== OrderStatus.Filled) {
+      continue;
+    }
+
+    const role = parseRemarkRole(order.remark ?? "");
+    if (role !== "stop_loss" && role !== "take_profit") {
+      continue;
+    }
+
+    const recordId = parseRemarkRecordId(order.remark ?? "");
+    if (!recordId) {
+      continue;
+    }
+
+    completedRecordIds.add(Number(recordId));
+  }
+
+  return completedRecordIds;
+}
+
 export async function collectCleanupActions(tradeCtx: TradeContext): Promise<CleanupAction[]> {
   const snapshot = await fetchCleanupSnapshot(tradeCtx);
   return buildCleanupActionsFromSnapshot(snapshot);
