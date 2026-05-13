@@ -2,10 +2,10 @@ import { OrderSide, OrderStatus, type TradeContext, TriggerStatus } from "longbr
 import { isAutoTradeRemark, parseRemarkRole } from "./symbols.js";
 import type { ActiveOrder as ActiveOrderParsed, Holding, PortfolioState } from "./types.js";
 
-/** How many days back to search for GTC orders. */
+/** 向后查找 GTC 订单的天数 */
 const HISTORY_DAYS = 30;
 
-/** Pending states that indicate an order is still active on the exchange. */
+/** 指示订单仍在交易所活跃的待处理状态 */
 const PENDING_STATUSES = new Set([
   OrderStatus.New,
   OrderStatus.NotReported,
@@ -34,7 +34,7 @@ function isPending(status: OrderStatus, triggerStatus: TriggerStatus | null | un
 }
 
 /**
- * Parse Longbridge OrderStatus to a human-readable string for logging.
+ * 将 Longbridge OrderStatus 解析为人类可读的字符串用于日志输出
  */
 function orderStatusName(status: OrderStatus): string {
   switch (status) {
@@ -96,11 +96,11 @@ function toActiveOrder(order: {
 }
 
 /**
- * Build portfolio state from prefetched Longbridge responses:
- * - Holdings via stockPositions()
- * - Active orders via todayOrders() + historyOrders() (for GTC SL/TP)
- * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
- *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
+ * 从预获取的 Longbridge 响应构建投资组合状态:
+ * - 持仓通过 stockPositions()
+ * - 活跃订单通过 todayOrders() + historyOrders() (用于 GTC 止损/止盈)
+ * - 对于没有止损/止盈的持仓: 检查买单是否在今天成交(→ 需要恢复)
+ *   vs. 跨日持仓(→ 止损/止盈作为 GTC 存在，不修改)
  */
 export function buildPortfolioStateFromSnapshot(
   snapshot: PortfolioSnapshot,
@@ -125,7 +125,7 @@ export function buildPortfolioStateFromSnapshot(
   const activeOrders: ActiveOrderParsed[] = [];
   const seenOrderIds = new Set<string>();
 
-  // Track which symbols had a buy order filled today
+  // 跟踪今天有买单成交的标的
   const todayFilledBuys = new Set<string>();
 
   for (const order of todayOrders) {
@@ -143,7 +143,7 @@ export function buildPortfolioStateFromSnapshot(
     }
   }
 
-  // Add history GTC orders not already in today's list
+  // 添加不在今日列表中的历史 GTC 订单
   let historyAdded = 0;
   for (const order of historyOrdersResp) {
     if (seenOrderIds.has(order.orderId)) continue;
@@ -158,9 +158,9 @@ export function buildPortfolioStateFromSnapshot(
     console.log(`[INFO] 从历史订单中额外发现 ${historyAdded} 个 GTC 挂单`);
   }
 
-  // 3. Determine which held symbols need SL/TP recovery
-  //    Only RECOVER if a buy was filled today (crash scenario).
-  //    Cross-day holdings likely have GTC SL/TP that the API can't see.
+  // 3. 确定哪些持仓需要止损/止盈恢复
+  //    仅在买单今天成交时恢复(崩溃场景)
+  //    跨日持仓可能有 API 看不到的 GTC 止损/止盈
   const symbolsWithSlTp = new Set(
     activeOrders
       .filter((o) => o.role === "stop_loss" || o.role === "take_profit")
@@ -170,10 +170,10 @@ export function buildPortfolioStateFromSnapshot(
   const orphanWarnings: string[] = [];
   for (const symbol of holdings.keys()) {
     if (!symbolsWithSlTp.has(symbol) && (todayFilledBuys.has(symbol) || strictSlTpCheck)) {
-      // Missing visible SL/TP and selected for recovery.
+      // 缺少可见的止损/止盈且被选中进行恢复
       orphanWarnings.push(symbol);
     } else if (!symbolsWithSlTp.has(symbol)) {
-      // Cross-day holding without visible SL/TP → GTC orders exist, leave alone
+      // 跨日持仓缺少可见的止损/止盈 → GTC 订单存在，保持不变
       console.log(`[INFO] ${symbol} 跨日持仓，未找到活跃 SL/TP 订单，跳过`);
     }
   }
@@ -186,11 +186,11 @@ export function buildPortfolioStateFromSnapshot(
 }
 
 /**
- * Fetch current portfolio state from Longbridge API:
- * - Holdings via stockPositions()
- * - Active orders via todayOrders() + historyOrders() (for GTC SL/TP)
- * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
- *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
+ * 从 Longbridge API 获取当前投资组合状态:
+ * - 持仓通过 stockPositions()
+ * - 活跃订单通过 todayOrders() + historyOrders() (用于 GTC 止损/止盈)
+ * - 对于没有止损/止盈的持仓: 检查买单是否在今天成交(→ 需要恢复)
+ *   vs. 跨日持仓(→ 止损/止盈作为 GTC 存在，不修改)
  */
 export async function fetchPortfolioState(
   tradeCtx: TradeContext,

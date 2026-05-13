@@ -10,15 +10,15 @@ const SELL_ADVICE = new Set(["卖出", "减仓"]);
 
 const A_SHARE_RE = /^[036]\d+$/;
 
-// ── Time windows ──────────────────────────────────────────────────────────────
+// ── 时间窗口 ──────────────────────────────────────────────────────────────
 
-/** Main signal window (hours). Set via WINDOW_HOURS env var. */
+/** 主信号窗口 (小时)。通过 WINDOW_HOURS 环境变量设置 */
 export const WINDOW_HOURS = Number(process.env.WINDOW_HOURS || "4");
 
-/** Extended window for SL/TP recovery. */
+/** 用于止损/止盈恢复的扩展窗口 */
 const SLTP_WINDOW_HOURS = 24;
 
-// ── Raw fetch ─────────────────────────────────────────────────────────────────
+// ── 原始获取 ──────────────────────────────────────────────────────────────
 
 function fetchRaw(dbPath: string, hours: number): AnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });

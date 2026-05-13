@@ -37,24 +37,24 @@ export function toLongbridgeSymbol(code: string): string | null {
 const A_SHARE_RE = /^[036]\d+$/;
 
 /**
- * Check if a DB code is an A-share (6-digit starting with 0/3/6).
+ * 检查 DB 代码是否是 A 股 (6 位数字以 0/3/6 开头)
  */
 export function isAShare(code: string): boolean {
   return A_SHARE_RE.test(code.trim());
 }
 
 /**
- * Reverse: extract symbol from remark like "auto-trade:buy:123" → undefined
- * (remark doesn't contain symbol — this is a placeholder for future use).
- * Mainly used to identify our auto-trade remarks.
+ * 反向: 从伯注中提取符号 例如 "auto-trade:buy:123" → undefined
+ * (伯注不包含符号 — 这是为了平例代码的预特位置)
+ * 主要用于辨别我们的自动交易伯注
  */
 export function isAutoTradeRemark(remark: string): boolean {
   return remark.startsWith("auto-trade:");
 }
 
 /**
- * Parse role from remark string.
- * "auto-trade:buy:123" → "buy", "auto-trade:sl:123" → "stop_loss", etc.
+ * 从伯注字符串中解析角色
+ * "auto-trade:buy:123" → "buy", "auto-trade:sl:123" → "stop_loss" 等等
  */
 export function parseRemarkRole(
   remark: string,
@@ -70,7 +70,7 @@ export function parseRemarkRole(
 }
 
 /**
- * Parse analysis record id from remark string.
+ * 从伯注字符串中解析分析记录 ID
  * "auto-trade:sl:123" → "123"
  */
 export function parseRemarkRecordId(remark: string): string | null {

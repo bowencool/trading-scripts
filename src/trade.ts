@@ -20,7 +20,7 @@ import { OrderWatcher } from "./lib/order-watcher.js";
 import { buildPortfolioStateFromSnapshot, fetchPortfolioState } from "./lib/portfolio.js";
 import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
-// ── Display ───────────────────────────────────────────────────────────────────
+// ── 显示 ───────────────────────────────────────────────────────────────────────
 
 function parseBoolEnv(value: string | undefined): boolean {
   return ["1", "true", "yes", "y"].includes((value ?? "").trim().toLowerCase());
@@ -112,7 +112,7 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── 主程序 ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -173,13 +173,13 @@ async function main(): Promise<void> {
     console.log(`🔍 [DRY RUN] 模拟运行，仅展示行动计划，不会实际下单\n`);
   }
 
-  // Connect to Longbridge (dry-run also needs readonly APIs for portfolio state)
+  // 连接 Longbridge (试运行也需要只读 API 来获取投资组合状态)
   console.log("🔐 正在连接 Longbridge...");
   const config = await buildConfig(clientId);
   const quoteCtx = QuoteContext.new(config);
   const tradeCtx = TradeContext.new(config);
 
-  // 1. Preview or execute orphan cleanup
+  // 1. 预览或执行孤儿订单清理
   console.log("🧹 清理孤儿订单...");
   const cleanupSnapshot = await fetchCleanupSnapshot(tradeCtx);
   const cleanupActions = buildCleanupActionsFromSnapshot(cleanupSnapshot);
@@ -206,7 +206,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 2. Fetch portfolio state (holdings + active orders)
+  // 2. 获取投资组合状态 (持仓 + 活跃订单)
   console.log("\n📊 获取持仓和活跃订单...");
   const portfolio = shouldReuseCleanupSnapshot
     ? buildPortfolioStateFromSnapshot(
@@ -253,11 +253,11 @@ async function main(): Promise<void> {
     }
   }
 
-  // 3. Query DB signals
+  // 3. 查询数据库信号
   const { buySignals, sellSignals, recentReports } = queryAll(dbPath);
   console.log(`\n📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
 
-  // 4. Fetch SL/TP records for all held symbols
+  // 4. 获取所有持仓标的的止损/止盈记录
   const slTpRecords = new Map<string, AnalysisRecord>();
   for (const symbol of portfolio.holdings.keys()) {
     const code = symbolToCode(symbol);
@@ -268,7 +268,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 5. Build startup preflight plan
+  // 5. 构建启动前预检查计划
   const preflightPlan = buildPreflightPlan(
     portfolio,
     buySignals,
@@ -278,7 +278,7 @@ async function main(): Promise<void> {
   );
   printActionPlan("启动前预检查", preflightPlan);
 
-  // 6. Dry-run renders the post-preflight trade plan and stops
+  // 6. 试运行展示启动后交易计划并停止
   if (isDryRun) {
     const projectedPortfolio = projectPortfolioAfterPreflight(portfolio, preflightPlan);
     const dryRunActionPlan = buildActionPlan(
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 7. Start WebSocket order push listener once for the full run
+  // 7. 为整个运行启动 WebSocket 订单推送监听器
   const orderWatcher = new OrderWatcher(tradeCtx);
   await orderWatcher.start();
 
@@ -323,7 +323,7 @@ async function main(): Promise<void> {
         break;
       }
       console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
-      // Non-fatal: continue with next plan
+      // 非致命错误: 继续处理下一个计划
     }
   }
 
@@ -333,7 +333,7 @@ async function main(): Promise<void> {
     console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
   }
 
-  // 8. Build and display final trade plan from post-preflight portfolio
+  // 8. 从启动后投资组合构建并展示最终交易计划
   const actionPlan = buildActionPlan(
     finalPortfolio,
     buySignals,
@@ -353,7 +353,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 9. Execute each trade action serially
+  // 9. 逐个执行每个交易操作
   for (const plan of actionable) {
     try {
       await executeAction(execConfig, plan);
@@ -366,7 +366,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 10. Cleanup
+  // 10. 清理
   await orderWatcher.stop();
   console.log("\n✅ 完成");
 }

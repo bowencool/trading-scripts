@@ -4,15 +4,14 @@ interface PendingOrder {
   resolve: (event: PushOrderChanged) => void;
 }
 
-/** Time to wait for WS push after a timeout-triggered cancel before force-resolving. */
+/** 超时触发的取消后等待 WS 推送的时间、之后强制解决 */
 const CANCEL_PUSH_GRACE_MS = 10_000;
 
 /**
- * OrderWatcher wraps TradeContext WebSocket push to provide:
- * waitForTerminal(orderId, timeoutMs?) — resolves when an order reaches a terminal state
+ * OrderWatcher 包装了 TradeContext WebSocket 推送以提供:
+ * waitForTerminal(orderId, timeoutMs?) — 当订单达到终下何状态时解决
  *
- * OCO logic has been removed — OCO cleanup is now handled by cleanup.ts at startup
- * using todayOrders() API checks.
+ * OCO 逻辑已被移除 — OCO 清理现在由 cleanup.ts 在启动时使用 todayOrders() API 检查处理
  */
 export class OrderWatcher {
   private pending = new Map<string, PendingOrder>();
@@ -22,7 +21,7 @@ export class OrderWatcher {
 
   constructor(private tradeCtx: TradeContext) {}
 
-  /** Start listening for order change events via WebSocket. */
+  /** 开始下好 WebSocket 推送监听器不听订单变更事件 */
   async start(): Promise<void> {
     if (this.started) return;
 
@@ -39,7 +38,7 @@ export class OrderWatcher {
     console.log("[WS] 订单推送已订阅");
   }
 
-  /** Stop listening and clean up all pending state. */
+  /** 停止下好淡学个业清理所有待处理的状态 */
   async stop(): Promise<void> {
     if (!this.started) return;
     await this.tradeCtx.unsubscribe([TopicType.Private]);
@@ -57,8 +56,8 @@ export class OrderWatcher {
   }
 
   /**
-   * Wait for an order to reach a terminal state (Filled/Canceled/Rejected/Expired).
-   * @param timeoutMs If set, automatically cancel the order after this many ms.
+   * 等待订单到达终下何状态 (Filled/Canceled/Rejected/Expired)。
+   * @param timeoutMs 如果设置，在这么多毫秒后自动取消订单。
    */
   waitForTerminal(orderId: string, timeoutMs?: number): Promise<PushOrderChanged> {
     const cached = this.terminalEvents.get(orderId);

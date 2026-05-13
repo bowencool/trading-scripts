@@ -1,6 +1,6 @@
 import { OrderStatus } from "longbridge";
 
-/** Terminal states where the order is no longer active on the exchange. */
+/** 订单不再在交易所活跃的终端状态 */
 export function isTerminal(status: OrderStatus): boolean {
   return (
     status === OrderStatus.Filled ||

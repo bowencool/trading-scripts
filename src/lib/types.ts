@@ -24,11 +24,11 @@ export interface AnalysisRecord {
 
 export interface Holding {
   symbol: string;
-  /** Total quantity held. */
+  /** 持仓总数量 */
   quantity: number;
-  /** Quantity available for sell (not locked by pending orders). */
+  /** 可卖数量（未被待成交订单锁定） */
   availableQuantity: number;
-  /** Average cost price. */
+  /** 平均成本价 */
   costPrice: number;
 }
 
@@ -37,22 +37,22 @@ export interface ActiveOrder {
   symbol: string;
   side: "Buy" | "Sell";
   orderType: string;
-  /** Limit price (0 for trigger-only orders like MIT). */
+  /** 限价（MIT 等触发单的值为 0） */
   price: string;
-  /** Trigger price for MIT/LIT orders. */
+  /** MIT/LIT 订单的触发价 */
   triggerPrice: string;
   quantity: string;
   status: string;
-  /** Role inferred from remark: buy | sell | stop_loss | take_profit */
+  /** 从备注推断的角色: buy | sell | stop_loss | take_profit */
   role: "buy" | "sell" | "stop_loss" | "take_profit";
-  /** For SL/TP orders, the remark from the original submission. */
+  /** 对于 SL/TP 订单，原始提交时的备注 */
   remark: string;
 }
 
 export interface PortfolioState {
   holdings: Map<string, Holding>;
   activeOrders: ActiveOrder[];
-  /** Symbols with a holding but no SL/TP orders detected and requiring recovery. */
+  /** 有持仓但未检测到 SL/TP 订单且需要恢复的标的 */
   orphanWarnings: string[];
 }
 
@@ -73,18 +73,18 @@ export type ActionKind =
 export interface ActionPlan {
   action: ActionKind;
   symbol: string;
-  /** The signal record that triggered this action. */
+  /** 触发此操作的信号记录 */
   record: AnalysisRecord;
-  /** Current holding (if any). */
+  /** 当前持仓（如有） */
   holding?: Holding;
-  /** For NEW_BUY/UPDATE_BUY: the pending buy order to update (if any). */
+  /** 对于 NEW_BUY/UPDATE_BUY: 要更新的待成交买单（如有） */
   pendingBuyOrder?: ActiveOrder;
-  /** For SYNC_SL_TP/RECOVER_SL_TP: existing SL order (if any). */
+  /** 对于 SYNC_SL_TP/RECOVER_SL_TP: 现存的止损单（如有） */
   existingSlOrder?: ActiveOrder;
-  /** For SYNC_SL_TP/RECOVER_SL_TP: existing TP order (if any). */
+  /** 对于 SYNC_SL_TP/RECOVER_SL_TP: 现存的止盈单（如有） */
   existingTpOrder?: ActiveOrder;
-  /** For SELL_PARTIAL: percentage to sell. */
+  /** 对于 SELL_PARTIAL: 卖出的百分比 */
   sellPct?: number;
-  /** Orders to cancel before continuing (conflicting pending orders or duplicate SL/TP). */
+  /** 需要取消的订单（冲突的待成交订单或重复的 SL/TP） */
   ordersToCancel?: ActiveOrder[];
 }
