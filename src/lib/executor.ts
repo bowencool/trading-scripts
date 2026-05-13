@@ -89,19 +89,24 @@ async function getEffectivePrice(
 }
 
 function printAnalysisRecord(record: AnalysisRecord): void {
-  console.log(`\n${"=".repeat(80)}`);
-  console.log(`🔹 [${record.code}] ${record.name ?? "未知"}`);
-  console.log(`   报告类型: ${record.report_type ?? "-"} | 时间: ${record.created_at}`);
-  console.log(
-    `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`,
-  );
-  console.log(
-    `   理想买入: ${record.ideal_buy ?? "-"} | 次选买入: ${record.secondary_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
-  );
+  console.log(`\n🔹 [${record.code}] ${record.name ?? "未知"} (${record.report_type ?? "-"})`);
+
+  const parts: string[] = [];
+  if (record.sentiment_score != null) parts.push(`\x1b[36m${record.sentiment_score}\x1b[0m`);
+  if (record.operation_advice) parts.push(record.operation_advice);
+  if (record.trend_prediction) parts.push(record.trend_prediction);
+  if (parts.length > 0) console.log(`   评分 ${parts.join(" · ")}`);
+
+  const prices: string[] = [];
+  if (record.ideal_buy != null) prices.push(`理想 \x1b[33m${record.ideal_buy}\x1b[0m`);
+  if (record.secondary_buy != null) prices.push(`次选 \x1b[33m${record.secondary_buy}\x1b[0m`);
+  if (record.stop_loss != null) prices.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
+  if (record.take_profit != null) prices.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  if (prices.length > 0) console.log(`   ${prices.join(" · ")}`);
+
   if (record.analysis_summary) {
-    console.log(`   摘要: ${record.analysis_summary}`);
+    console.log(`   ${record.analysis_summary}`);
   }
-  console.log("-".repeat(80));
 }
 
 const MAX_SUBMIT_RETRIES = 2;
@@ -208,40 +213,33 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     return;
   }
 
-  console.log(`\n📋 交易计划 [${isAddPosition ? "ADD_POSITION" : "NEW_BUY"}]:`);
   console.log(
-    `   标的: ${symbol} | 当前价: ${currentPriceNum}（${priceSource}） | 目标价: ${targetPrice}`,
+    `\n📋 ${isAddPosition ? "加仓" : "买入"} ${symbol} | 现价 ${currentPriceNum}（${priceSource}）→ 限价 \x1b[33m${threshold}\x1b[0m（${priceThresholdPct}% 阈值）`,
   );
   if (holding) {
-    console.log(`   当前持仓: ${holding.quantity} 股 @ 成本 ${holding.costPrice}`);
+    console.log(
+      `   持仓 \x1b[36m${holding.quantity}\x1b[0m 股 @ 成本 \x1b[33m${holding.costPrice}\x1b[0m`,
+    );
   }
   console.log(
-    `   账户购买力: ${buyPower.toFixed(0)} ${currency} | 净资产: ${netAssets.toFixed(0)} ${currency}`,
-  );
-  console.log(
-    `   资金上限: ${buyPct}% = ${sizing.cashCapValue.toFixed(0)} ${currency} | 单笔风险: ${riskPctPerTrade}%`,
+    `   购买力 \x1b[36m${buyPower.toFixed(0)}\x1b[0m ${currency} | 资金上限 ${buyPct}% = ${sizing.cashCapValue.toFixed(0)} | 单笔风险 ${riskPctPerTrade}%`,
   );
   if (sizing.mode === "risk_budget") {
     console.log(
-      `   风险预算: ${sizing.riskBudgetValue?.toFixed(0)} ${currency} | 单股风险: ${sizing.riskPerShare?.toFixed(2)} | 风险上限: ${sizing.riskCapQuantity} 股`,
+      `   风险预算 ${sizing.riskBudgetValue?.toFixed(0)} ${currency} | 单股风险 ${sizing.riskPerShare?.toFixed(2)} | 上限 \x1b[36m${sizing.riskCapQuantity}\x1b[0m 股`,
     );
-  } else {
-    console.log("   风险预算: 未启用或缺少有效止损，按资金比例计算");
   }
   if (sizing.positionCapValue != null) {
     console.log(
-      `   单标的上限: ${maxPositionPct}% = ${sizing.positionCapValue.toFixed(0)} ${currency} | 可追加上限: ${sizing.positionCapQuantity} 股`,
+      `   单标的上限 ${maxPositionPct}% = ${sizing.positionCapValue.toFixed(0)} | 追加上限 \x1b[36m${sizing.positionCapQuantity}\x1b[0m 股`,
     );
   }
+  const slTp: string[] = [];
+  if (record.stop_loss) slTp.push(`SL \x1b[31m${record.stop_loss}\x1b[0m (MIT)`);
+  if (record.take_profit) slTp.push(`TP \x1b[32m${record.take_profit}\x1b[0m (LIT)`);
   console.log(
-    `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
+    `   买入 \x1b[36m${qty}\x1b[0m 股（${qty / lotSize} 手 × ${lotSize}）${slTp.length > 0 ? ` | ${slTp.join(" | ")}` : ""} | 10s 超时`,
   );
-  console.log(
-    `   目标价: ${targetPrice} | \x1b[33m限价: ${threshold}（${priceThresholdPct}% 阈值上限）\x1b[0m`,
-  );
-  if (record.stop_loss) console.log(`   止损: ${record.stop_loss} (MIT 市价触单)`);
-  if (record.take_profit) console.log(`   止盈: ${record.take_profit} (LIT 限价触单)`);
-  console.log(`   ⏳ 限价单等待: 10 秒（超时未成交则跳过）`);
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(
@@ -320,9 +318,9 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
   const pendingPrice = Number(pendingBuyOrder.price);
   const pendingQty = Number(pendingBuyOrder.quantity);
 
-  console.log(`\n📋 交易计划 [UPDATE_BUY]:`);
-  console.log(`   标的: ${symbol} | 当前挂单价: ${pendingPrice} → 新价: ${threshold}`);
-  console.log(`   当前挂单量: ${pendingQty}`);
+  console.log(
+    `\n📋 更新买单 ${symbol} | 挂单 ${pendingPrice} → \x1b[33m${threshold}\x1b[0m | \x1b[36m${pendingQty}\x1b[0m 股`,
+  );
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(
@@ -361,12 +359,9 @@ async function executeCancelConflictingOrders(
 
   printAnalysisRecord(plan.record);
 
-  console.log(`\n📋 冲突挂单清理 [CANCEL_CONFLICTING_ORDERS]:`);
-  console.log(`   标的: ${plan.symbol} | 最新信号: ${plan.record.operation_advice ?? "-"}`);
+  console.log(`\n📋 取消冲突挂单 ${plan.symbol}（信号: ${plan.record.operation_advice ?? "-"}）`);
   for (const order of ordersToCancel) {
-    console.log(
-      `   取消挂单: ${order.orderId} | 角色: ${order.role} | 价格: ${order.price} | 数量: ${order.quantity}`,
-    );
+    console.log(`   ${order.orderId} ${order.role} @ ${order.price} × ${order.quantity}`);
   }
 
   if (!autoApprove) {
@@ -461,14 +456,11 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
 
   // Use bid1 as sell price
   const sellPrice = currentPrice;
-  const orderType = "限价单 (LO)";
 
-  console.log(`\n📋 卖出计划 [${action}]:`);
   console.log(
-    `   标的: ${symbol} | 当前价: ${currentPrice}（${priceSource}） | 成本价: ${costPrice}`,
+    `\n📋 ${isPartial ? "减仓" : "清仓"} ${symbol} | 现价 ${currentPrice}（${priceSource}）→ 卖出 \x1b[33m${sellPrice}\x1b[0m | \x1b[36m${sellQty}\x1b[0m 股`,
   );
-  console.log(`   卖出价: ${sellPrice} | 数量: ${sellQty} | 订单类型: ${orderType}`);
-  console.log(`   模式: ${isPartial ? "减仓" : "清仓"}`);
+  console.log(`   成本 \x1b[33m${costPrice}\x1b[0m`);
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(
@@ -549,21 +541,24 @@ async function executeSyncSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promise<v
     const oldTrigger = Number(existingSlOrder.triggerPrice);
     const newTrigger = record.stop_loss;
     const oldQty = Number(existingSlOrder.quantity);
-    if (oldTrigger !== newTrigger) changes.push(`止损价 ${oldTrigger} → ${newTrigger}`);
-    if (oldQty !== holding.quantity) changes.push(`止损量 ${oldQty} → ${holding.quantity}`);
+    if (oldTrigger !== newTrigger)
+      changes.push(`止损价 ${oldTrigger} → \x1b[31m${newTrigger}\x1b[0m`);
+    if (oldQty !== holding.quantity)
+      changes.push(`止损量 ${oldQty} → \x1b[36m${holding.quantity}\x1b[0m`);
   }
   if (existingTpOrder) {
     const oldTrigger = Number(existingTpOrder.triggerPrice);
     const newTrigger = record.take_profit;
     const oldQty = Number(existingTpOrder.quantity);
-    if (oldTrigger !== newTrigger) changes.push(`止盈价 ${oldTrigger} → ${newTrigger}`);
-    if (oldQty !== holding.quantity) changes.push(`止盈量 ${oldQty} → ${holding.quantity}`);
+    if (oldTrigger !== newTrigger)
+      changes.push(`止盈价 ${oldTrigger} → \x1b[32m${newTrigger}\x1b[0m`);
+    if (oldQty !== holding.quantity)
+      changes.push(`止盈量 ${oldQty} → \x1b[36m${holding.quantity}\x1b[0m`);
   }
 
-  console.log(`\n📋 SL/TP 同步 [SYNC_SL_TP]:`);
-  console.log(`   标的: ${symbol} | 持仓: ${holding.quantity} 股`);
+  console.log(`\n📋 同步 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）`);
   for (const c of changes) {
-    console.log(`   - ${c}`);
+    console.log(`   ${c}`);
   }
 
   if (!autoApprove) {
@@ -624,10 +619,12 @@ async function executeRecoverSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promis
   const missingSl = record.stop_loss != null && !existingSlOrder;
   const missingTp = record.take_profit != null && !existingTpOrder;
 
-  console.log(`\n📋 SL/TP 补挂 [RECOVER_SL_TP]:`);
-  console.log(`   标的: ${symbol} | 持仓: ${holding.quantity} 股`);
-  if (missingSl) console.log(`   补挂止损: ${record.stop_loss}`);
-  if (missingTp) console.log(`   补挂止盈: ${record.take_profit}`);
+  const missing: string[] = [];
+  if (missingSl) missing.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
+  if (missingTp) missing.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  console.log(
+    `\n📋 补挂 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）: ${missing.join(" · ")}`,
+  );
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(`\n确认补挂 SL/TP？(Enter 确认 / Esc 取消): `);
@@ -659,11 +656,12 @@ async function executeMergeSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promise<
   const slCount = ordersToCancel.filter((o) => o.role === "stop_loss").length;
   const tpCount = ordersToCancel.filter((o) => o.role === "take_profit").length;
 
-  console.log(`\n📋 合并 SL/TP [MERGE_SL_TP]:`);
-  console.log(`   标的: ${symbol} | 持仓: ${holding.quantity} 股`);
-  console.log(`   重复订单: ${slCount} 个止损 + ${tpCount} 个止盈 → 合并为 1 对`);
-  if (record.stop_loss != null) console.log(`   新止损: ${record.stop_loss}`);
-  if (record.take_profit != null) console.log(`   新止盈: ${record.take_profit}`);
+  const newSlTp: string[] = [];
+  if (record.stop_loss != null) newSlTp.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
+  if (record.take_profit != null) newSlTp.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  console.log(
+    `\n📋 合并 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）: ${slCount} SL + ${tpCount} TP → ${newSlTp.join(" · ")}`,
+  );
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(

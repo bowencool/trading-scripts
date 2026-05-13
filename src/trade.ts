@@ -68,47 +68,60 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
   for (const plan of plans) {
     const { symbol, record, action } = plan;
     const label = ACTION_LABEL[action];
-    console.log(`${"=".repeat(80)}`);
-    console.log(`${label} [${record.code}] ${record.name ?? "未知"} → ${symbol}`);
-    console.log(`   报告类型: ${record.report_type ?? "-"} | 时间: ${record.created_at}`);
-    console.log(
-      `   情绪评分: ${record.sentiment_score ?? "-"} | 操作建议: ${record.operation_advice ?? "-"} | 趋势: ${record.trend_prediction ?? "-"}`,
-    );
-    console.log(
-      `   理想买入: ${record.ideal_buy ?? "-"} | 止损: ${record.stop_loss ?? "-"} | 止盈: ${record.take_profit ?? "-"}`,
-    );
 
+    // Line 1: action + symbol
+    console.log(`  ${label} [${record.code}] ${record.name ?? "未知"} → ${symbol}`);
+
+    // Line 2: signal summary
+    const parts: string[] = [];
+    if (record.sentiment_score != null) parts.push(`\x1b[36m${record.sentiment_score}\x1b[0m`);
+    if (record.operation_advice) parts.push(record.operation_advice);
+    if (record.trend_prediction) parts.push(record.trend_prediction);
+    if (parts.length > 0) console.log(`    评分 ${parts.join(" · ")}`);
+
+    // Line 3: prices
+    const prices: string[] = [];
+    if (record.ideal_buy != null) prices.push(`理想 \x1b[33m${record.ideal_buy}\x1b[0m`);
+    if (record.stop_loss != null) prices.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
+    if (record.take_profit != null) prices.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+    if (prices.length > 0) console.log(`    ${prices.join(" · ")}`);
+
+    // Line 4: holding (if any)
     if (plan.holding) {
       console.log(
-        `   持仓: ${plan.holding.quantity} 股 | 可卖: ${plan.holding.availableQuantity} 股 | 成本价: ${plan.holding.costPrice}`,
+        `    持仓 \x1b[36m${plan.holding.quantity}\x1b[0m 股 (可用 ${plan.holding.availableQuantity}) @ 成本 \x1b[33m${plan.holding.costPrice}\x1b[0m`,
       );
     }
 
+    // Line 5: pending order
     if (plan.pendingBuyOrder) {
       console.log(
-        `   Pending 买单: ${plan.pendingBuyOrder.orderId} @ ${plan.pendingBuyOrder.price}`,
+        `    挂单 ${plan.pendingBuyOrder.orderId} @ \x1b[33m${plan.pendingBuyOrder.price}\x1b[0m`,
       );
     }
 
+    // Line 6: conflicting orders
     if (plan.action === "CANCEL_CONFLICTING_ORDERS" && plan.ordersToCancel) {
       console.log(
-        `   冲突挂单: ${plan.ordersToCancel.map((order) => `${order.orderId}(${order.role})`).join(", ")}`,
+        `    冲突: ${plan.ordersToCancel.map((o) => `${o.orderId}(${o.role})`).join(", ")}`,
       );
     }
 
+    // Line 7: existing SL/TP
+    const slTpParts: string[] = [];
     if (plan.existingSlOrder) {
-      console.log(
-        `   现有止损: ${plan.existingSlOrder.orderId || "(预期新单)"} @ ${plan.existingSlOrder.triggerPrice}`,
+      slTpParts.push(
+        `SL ${plan.existingSlOrder.orderId || "新"}@${plan.existingSlOrder.triggerPrice}`,
       );
     }
-
     if (plan.existingTpOrder) {
-      console.log(
-        `   现有止盈: ${plan.existingTpOrder.orderId || "(预期新单)"} @ ${plan.existingTpOrder.triggerPrice}`,
+      slTpParts.push(
+        `TP ${plan.existingTpOrder.orderId || "新"}@${plan.existingTpOrder.triggerPrice}`,
       );
     }
+    if (slTpParts.length > 0) console.log(`    现有 ${slTpParts.join(" · ")}`);
 
-    console.log(`${"=".repeat(80)}`);
+    console.log(); // blank line between records
   }
 }
 
