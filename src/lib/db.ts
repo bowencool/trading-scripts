@@ -128,6 +128,21 @@ export function queryAll(dbPath: string): {
 }
 
 /**
+ * Fetch a single record by its primary key id.
+ */
+export function queryRecordById(dbPath: string, id: number): AnalysisRecord | null {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const rows = db
+      .prepare(`SELECT ${COLUMNS} FROM analysis_history WHERE id = ?`)
+      .all(id) as unknown as AnalysisRecord[];
+    return rows.length > 0 ? rows[0] : null;
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * SL/TP lookup for a given symbol. Uses a 24h window first,
  * then falls back to the most recent record with SL/TP (no time limit).
  */

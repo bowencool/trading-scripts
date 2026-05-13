@@ -216,6 +216,7 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
   console.log(
     `\n📋 ${isAddPosition ? "加仓" : "买入"} ${symbol} | 现价 ${currentPriceNum}（${priceSource}）→ 限价 \x1b[33m${threshold}\x1b[0m（${priceThresholdPct}% 阈值）`,
   );
+  console.log(`   记录 #${record.id} · ${record.created_at}`);
   if (holding) {
     console.log(
       `   持仓 \x1b[36m${holding.quantity}\x1b[0m 股 @ 成本 \x1b[33m${holding.costPrice}\x1b[0m`,
@@ -360,6 +361,7 @@ async function executeCancelConflictingOrders(
   printAnalysisRecord(plan.record);
 
   console.log(`\n📋 取消冲突挂单 ${plan.symbol}（信号: ${plan.record.operation_advice ?? "-"}）`);
+  console.log(`   记录 #${plan.record.id} · ${plan.record.created_at}`);
   for (const order of ordersToCancel) {
     console.log(`   ${order.orderId} ${order.role} @ ${order.price} × ${order.quantity}`);
   }
@@ -460,6 +462,7 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   console.log(
     `\n📋 ${isPartial ? "减仓" : "清仓"} ${symbol} | 现价 ${currentPrice}（${priceSource}）→ 卖出 \x1b[33m${sellPrice}\x1b[0m | \x1b[36m${sellQty}\x1b[0m 股`,
   );
+  console.log(`   记录 #${record.id} · ${record.created_at}`);
   console.log(`   成本 \x1b[33m${costPrice}\x1b[0m`);
 
   if (!autoApprove) {
@@ -557,6 +560,7 @@ async function executeSyncSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promise<v
   }
 
   console.log(`\n📋 同步 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）`);
+  console.log(`   记录 #${record.id} · ${record.created_at}`);
   for (const c of changes) {
     console.log(`   ${c}`);
   }

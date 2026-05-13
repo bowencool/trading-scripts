@@ -14,13 +14,19 @@ import {
   projectPortfolioAfterPreflight,
 } from "./lib/comparator.js";
 import { promptConfirm } from "./lib/confirm.js";
-import { queryAll, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
+import { queryAll, queryRecordById, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
 import { executeAction, FatalError } from "./lib/executor.js";
 import { OrderWatcher } from "./lib/order-watcher.js";
 import { buildPortfolioStateFromSnapshot, fetchPortfolioState } from "./lib/portfolio.js";
 import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
 // ── 显示 ───────────────────────────────────────────────────────────────────────
+
+/** Extract record ID from remark like "auto-trade:buy:123" */
+function extractRecordIdFromRemark(remark: string): number | null {
+  const m = remark.match(/auto-trade:\w+:(\d+)/);
+  return m ? Number(m[1]) : null;
+}
 
 function parseBoolEnv(value: string | undefined): boolean {
   return ["1", "true", "yes", "y"].includes((value ?? "").trim().toLowerCase());
@@ -71,6 +77,9 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
 
     // Line 1: action + symbol
     console.log(`  ${label} [${record.code}] ${record.name ?? "未知"} → ${symbol}`);
+
+    // Line 1.5: record id & time
+    console.log(`    记录 #${record.id} · ${record.created_at}`);
 
     // Line 2: signal summary
     const parts: string[] = [];
@@ -240,6 +249,17 @@ async function main(): Promise<void> {
   }
   console.log(`📊 活跃订单: ${portfolio.activeOrders.length} 个`);
 
+  // 3. 查询所有持仓标的的止损/止盈分析记录
+  const slTpRecords = new Map<string, AnalysisRecord>();
+  for (const symbol of portfolio.holdings.keys()) {
+    const code = symbolToCode(symbol);
+    if (!code) continue;
+    const slTpRecord = querySlTpRecord(dbPath, code);
+    if (slTpRecord) {
+      slTpRecords.set(symbol, slTpRecord);
+    }
+  }
+
   const existingSlTpOrders = portfolio.activeOrders.filter(
     (order) => order.role === "stop_loss" || order.role === "take_profit",
   );
@@ -251,8 +271,10 @@ async function main(): Promise<void> {
     for (const order of existingSlTpOrders) {
       const label = order.role === "stop_loss" ? "止损" : "止盈";
       const price = order.role === "stop_loss" ? order.triggerPrice : order.price;
+      const rec = slTpRecords.get(order.symbol);
+      const recInfo = rec ? ` | 记录 #${rec.id} · ${rec.created_at}` : "";
       console.log(
-        `   ${order.symbol}: ${label} ${order.orderId} @ ${price} | 数量 ${order.quantity} | 状态 ${order.status}`,
+        `   ${order.symbol}: ${label} ${order.orderId} @ ${price} | 数量 ${order.quantity} | 状态 ${order.status}${recInfo}`,
       );
     }
   }
@@ -260,26 +282,18 @@ async function main(): Promise<void> {
     console.log(`📊 活跃未成交普通订单: ${existingWorkingOrders.length} 个`);
     for (const order of existingWorkingOrders) {
       const label = order.role === "buy" ? "买单" : "卖单";
+      const remarkId = extractRecordIdFromRemark(order.remark);
+      const rec = remarkId != null ? queryRecordById(dbPath, remarkId) : null;
+      const recInfo = rec ? ` | 记录 #${rec.id} · ${rec.created_at}` : "";
       console.log(
-        `   ${order.symbol}: ${label} ${order.orderId} @ ${order.price} | 数量 ${order.quantity} | 状态 ${order.status}`,
+        `   ${order.symbol}: ${label} ${order.orderId} @ ${order.price} | 数量 ${order.quantity} | 状态 ${order.status}${recInfo}`,
       );
     }
   }
 
-  // 3. 查询数据库信号
+  // 4. 查询数据库信号
   const { buySignals, sellSignals, recentReports } = queryAll(dbPath);
   console.log(`\n📊 最近 ${WINDOW_HOURS} 小时分析报告: ${recentReports.length} 条`);
-
-  // 4. 获取所有持仓标的的止损/止盈记录
-  const slTpRecords = new Map<string, AnalysisRecord>();
-  for (const symbol of portfolio.holdings.keys()) {
-    const code = symbolToCode(symbol);
-    if (!code) continue;
-    const slTpRecord = querySlTpRecord(dbPath, code);
-    if (slTpRecord) {
-      slTpRecords.set(symbol, slTpRecord);
-    }
-  }
 
   // 5. 构建启动前预检查计划
   const preflightPlan = buildPreflightPlan(
@@ -291,7 +305,7 @@ async function main(): Promise<void> {
   );
   printActionPlan("启动前预检查", preflightPlan);
 
-  // 6. 试运行展示启动后交易计划并停止
+  // 7. 试运行展示启动后交易计划并停止
   if (isDryRun) {
     const projectedPortfolio = projectPortfolioAfterPreflight(portfolio, preflightPlan);
     const dryRunActionPlan = buildActionPlan(
@@ -308,7 +322,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 7. 为整个运行启动 WebSocket 订单推送监听器
+  // 8. 为整个运行启动 WebSocket 订单推送监听器
   const orderWatcher = new OrderWatcher(tradeCtx);
   await orderWatcher.start();
 
@@ -346,7 +360,7 @@ async function main(): Promise<void> {
     console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
   }
 
-  // 8. 从启动后投资组合构建并展示最终交易计划
+  // 9. 从启动后投资组合构建并展示最终交易计划
   const actionPlan = buildActionPlan(
     finalPortfolio,
     buySignals,
@@ -366,7 +380,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 9. 逐个执行每个交易操作
+  // 10. 逐个执行每个交易操作
   for (const plan of actionable) {
     try {
       await executeAction(execConfig, plan);
@@ -379,7 +393,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 10. 清理
+  // 11. 清理
   await orderWatcher.stop();
   console.log("\n✅ 完成");
 }

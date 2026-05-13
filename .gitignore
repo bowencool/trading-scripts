@@ -152,3 +152,4 @@ stock_analysis.db
 *.db-shm
 *.db-wal
 
+.claude/
