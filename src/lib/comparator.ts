@@ -88,10 +88,6 @@ export function buildActionPlan(
       }
     }
 
-    if (holding && !isAddPosition) {
-      continue;
-    }
-
     if (pendingBuy) {
       // Check if limit price needs updating.
       // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy

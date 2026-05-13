@@ -274,13 +274,15 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
   const buyDetail = await tradeCtx.orderDetail(buyOrderId);
   const buyFilledQty = Number(buyDetail.executedQuantity.toString());
 
+  // buyFilledQty is the source of truth — the WS push status may be stale
+  // when a race occurs between timeout-cancellation and exchange fill.
+  if (buyFilledQty <= 0) {
+    console.log(`[SKIP] 限价单 ${buyOrderId} 未成交 (WS 状态: ${buyEvent.status})，跳过`);
+    return;
+  }
   if (buyEvent.status !== OrderStatus.Filled) {
-    if (buyFilledQty <= 0) {
-      console.log(`[SKIP] 限价单 ${buyOrderId} 10 秒内未成交 (状态: ${buyEvent.status})，跳过`);
-      return;
-    }
-    console.log(
-      `[WARN] 限价单 ${buyOrderId} 部分成交 ${buyFilledQty}/${qty} 股，以已成交数量设置止损/止盈`,
+    console.warn(
+      `[RACE] 限价单 ${buyOrderId} WS 状态 ${buyEvent.status} 但实际已成交 ${buyFilledQty}/${qty} 股（取消与成交竞态），以实际成交数量为准`,
     );
   } else {
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
@@ -423,7 +425,7 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   }
 
   // Cancel existing SL/TP orders (atomic: cancel first, then sell)
-  const slTpToCancel = cfg.tradeCtx ? await getSlTpOrdersForSymbol(cfg, symbol, plan) : [];
+  const slTpToCancel = getSlTpOrdersForSymbol(cfg, symbol, plan);
   const cancelledOrderIds: string[] = [];
 
   for (const slTp of slTpToCancel) {
@@ -819,11 +821,11 @@ async function syncSlTpAfterBuy(
 /**
  * Get SL/TP orders from the portfolio's active orders for a symbol.
  */
-async function getSlTpOrdersForSymbol(
+function getSlTpOrdersForSymbol(
   _cfg: ExecutorConfig,
   _symbol: string,
   plan: ActionPlan,
-): Promise<ActiveOrder[]> {
+): ActiveOrder[] {
   if (plan.ordersToCancel && plan.ordersToCancel.length > 0) {
     return dedupeOrdersById(plan.ordersToCancel);
   }
