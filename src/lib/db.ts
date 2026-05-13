@@ -116,9 +116,6 @@ export function queryAll(dbPath: string): {
     }
 
     if (SELL_ADVICE.has(advice)) {
-      if (record.take_profit == null) {
-        continue;
-      }
       sellSignals.push(record);
     }
   }
