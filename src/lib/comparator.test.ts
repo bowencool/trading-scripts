@@ -151,6 +151,47 @@ test("buildActionPlan still buys when only an older record id was completed", ()
   assert.equal(plans[0]?.record.id, 99);
 });
 
+test("buildActionPlan creates add-position action for held symbols with add signal", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map([
+      [
+        "AAPL.US",
+        {
+          symbol: "AAPL.US",
+          quantity: 100,
+          availableQuantity: 100,
+          costPrice: 98,
+        },
+      ],
+    ]),
+    activeOrders: [
+      makeOrder(),
+      makeOrder({
+        orderId: "tp-1",
+        orderType: "LIT",
+        price: "110",
+        triggerPrice: "110",
+        role: "take_profit",
+        remark: "auto-trade:tp:1",
+      }),
+    ],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(
+    portfolio,
+    [makeRecord({ operation_advice: "加仓", trend_prediction: "看多" })],
+    [],
+    new Map(),
+  );
+
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.action, "ADD_POSITION");
+  assert.equal(plans[0]?.holding?.quantity, 100);
+  assert.equal(plans[0]?.existingSlOrder?.orderId, "ord-1");
+  assert.equal(plans[0]?.existingTpOrder?.orderId, "tp-1");
+});
+
 test("buildPreflightPlan cancels a stale pending buy when the latest signal turns sell", () => {
   const portfolio: PortfolioState = {
     holdings: new Map(),

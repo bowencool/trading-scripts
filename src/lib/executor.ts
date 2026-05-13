@@ -131,9 +131,10 @@ async function submitWithRetry(
 
 // ── Action executors ──────────────────────────────────────────────────────────
 
-async function executeNewBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> {
+async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> {
   const { quoteCtx, tradeCtx, orderWatcher, autoApprove, buyPct, priceThresholdPct } = cfg;
-  const { symbol, record } = plan;
+  const { symbol, record, holding } = plan;
+  const isAddPosition = plan.action === "ADD_POSITION";
   // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
   const targetPrice = record.ideal_buy!;
 
@@ -183,10 +184,13 @@ async function executeNewBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<voi
     return;
   }
 
-  console.log(`\n📋 交易计划 [NEW_BUY]:`);
+  console.log(`\n📋 交易计划 [${isAddPosition ? "ADD_POSITION" : "NEW_BUY"}]:`);
   console.log(
     `   标的: ${symbol} | 当前价: ${currentPriceNum}（${priceSource}） | 目标价: ${targetPrice}`,
   );
+  if (holding) {
+    console.log(`   当前持仓: ${holding.quantity} 股 @ 成本 ${holding.costPrice}`);
+  }
   console.log(
     `   账户购买力: ${buyPower.toFixed(0)} ${currency} | 买入比例: ${buyPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
   );
@@ -243,7 +247,18 @@ async function executeNewBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<voi
     console.log(`[OK] 限价买单已成交: ${buyOrderId}`);
   }
 
-  // Submit SL/TP after buy fills
+  if (isAddPosition && holding) {
+    await syncSlTpAfterBuy(
+      cfg,
+      symbol,
+      record,
+      holding.quantity + buyFilledQty,
+      plan.existingSlOrder,
+      plan.existingTpOrder,
+    );
+    return;
+  }
+
   await submitSlTp(cfg, symbol, record, buyFilledQty);
 }
 
@@ -718,6 +733,50 @@ async function submitSlTpPartial(
   }
 }
 
+async function syncSlTpAfterBuy(
+  cfg: ExecutorConfig,
+  symbol: string,
+  record: AnalysisRecord,
+  quantity: number,
+  existingSlOrder: ActiveOrder | undefined,
+  existingTpOrder: ActiveOrder | undefined,
+): Promise<void> {
+  console.log(`[SYNC] ${symbol} 加仓成交后同步 SL/TP 到总持仓 ${quantity} 股`);
+
+  if (existingSlOrder) {
+    const trigger = record.stop_loss ?? Number(existingSlOrder.triggerPrice);
+    await cfg.tradeCtx.replaceOrder({
+      orderId: existingSlOrder.orderId,
+      quantity: new Decimal(String(quantity)),
+      triggerPrice: new Decimal(String(trigger)),
+      remark: `auto-trade:sl:${record.id}`,
+    });
+    console.log(
+      `[OK] 止损单 ${existingSlOrder.orderId} 已同步: 数量=${quantity}, 触发价=${trigger}`,
+    );
+  } else if (record.stop_loss != null) {
+    await submitSlTpPartial(cfg, symbol, record, quantity, true, false);
+  } else {
+    console.warn(`[WARN] ${symbol} 加仓后缺少止损价，无法补挂止损`);
+  }
+
+  if (existingTpOrder) {
+    const trigger = record.take_profit ?? Number(existingTpOrder.triggerPrice);
+    await cfg.tradeCtx.replaceOrder({
+      orderId: existingTpOrder.orderId,
+      quantity: new Decimal(String(quantity)),
+      price: new Decimal(String(trigger)),
+      triggerPrice: new Decimal(String(trigger)),
+      remark: `auto-trade:tp:${record.id}`,
+    });
+    console.log(
+      `[OK] 止盈单 ${existingTpOrder.orderId} 已同步: 数量=${quantity}, 触发价=${trigger}`,
+    );
+  } else if (record.take_profit != null) {
+    await submitSlTpPartial(cfg, symbol, record, quantity, false, true);
+  }
+}
+
 /**
  * Get SL/TP orders from the portfolio's active orders for a symbol.
  */
@@ -793,7 +852,8 @@ export async function executeAction(cfg: ExecutorConfig, plan: ActionPlan): Prom
       await executeCancelConflictingOrders(cfg, plan);
       break;
     case "NEW_BUY":
-      await executeNewBuy(cfg, plan);
+    case "ADD_POSITION":
+      await executeBuy(cfg, plan);
       break;
     case "UPDATE_BUY":
       await executeUpdateBuy(cfg, plan);

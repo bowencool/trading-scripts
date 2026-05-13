@@ -44,6 +44,7 @@ analysis_history (DB)    Longbridge API          Longbridge API
 | Action | 条件 | 行为 |
 | --- | --- | --- |
 | `NEW_BUY` | 不持仓 + 信号=买入 + 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
+| `ADD_POSITION` | 已持仓 + 信号=加仓 + 无 pending 买单 | 限价加仓，成交后将 SL/TP 同步到新总持仓 |
 | `UPDATE_BUY` | 有 pending 买单 + 信号价格不一致 | `replaceOrder` 同步 |
 | `SELL_FULL` | 持仓 + 信号=卖出 | 取消 SL/TP → 限价卖出（挂买一） |
 | `SELL_PARTIAL` | 持仓 + 信号=减仓 | 取消 SL/TP → 限价卖 sellPct%（挂买一） |

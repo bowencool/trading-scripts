@@ -61,6 +61,7 @@ export interface PortfolioState {
 export type ActionKind =
   | "CANCEL_CONFLICTING_ORDERS"
   | "NEW_BUY"
+  | "ADD_POSITION"
   | "UPDATE_BUY"
   | "SELL_FULL"
   | "SELL_PARTIAL"

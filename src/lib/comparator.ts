@@ -48,9 +48,35 @@ export function buildActionPlan(
 
     const holding = portfolio.holdings.get(symbol);
     const pendingBuy = portfolio.activeOrders.find((o) => o.symbol === symbol && o.role === "buy");
+    const isAddPosition = (record.operation_advice ?? "").includes("加仓");
 
     if (holding) {
-      console.log(`[SKIP] ${symbol} 已持仓 ${holding.quantity} 股，跳过买入信号`);
+      if (!isAddPosition) {
+        console.log(`[SKIP] ${symbol} 已持仓 ${holding.quantity} 股，跳过买入信号`);
+        continue;
+      }
+
+      if (!pendingBuy) {
+        const existingSlOrder = portfolio.activeOrders.find(
+          (o) => o.symbol === symbol && o.role === "stop_loss",
+        );
+        const existingTpOrder = portfolio.activeOrders.find(
+          (o) => o.symbol === symbol && o.role === "take_profit",
+        );
+        plans.push({
+          action: "ADD_POSITION",
+          symbol,
+          record,
+          holding,
+          existingSlOrder,
+          existingTpOrder,
+        });
+        processedSymbols.add(symbol);
+        continue;
+      }
+    }
+
+    if (holding && !isAddPosition) {
       continue;
     }
 

@@ -25,6 +25,7 @@ import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 const ACTION_LABEL: Record<ActionKind, string> = {
   CANCEL_CONFLICTING_ORDERS: "🚫 取消冲突挂单",
   NEW_BUY: "🆕 新建买入",
+  ADD_POSITION: "➕ 加仓买入",
   UPDATE_BUY: "🔄 更新买单",
   SELL_FULL: "📉 全仓卖出",
   SELL_PARTIAL: "📉 部分减仓",
