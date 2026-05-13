@@ -23,41 +23,24 @@
 
 ## 交易流程
 
-```
-analysis_history (DB)                Longbridge API
-       │                    stockPositions() / todayOrders() / historyOrders()
-       ▼                                  │
- queryAll()                               ▼
- (买入/加仓/卖出/减仓信号)          cleanup snapshot
-       │                         (持仓 / 活跃订单 / 已成交 SL/TP)
-       │                                  │
-       ├──────────────┬───────────────────┘
-       ▼              ▼
- querySlTpRecord()  cleanup orphan / OCO orders
- (持仓保护单价格)   collect completed record ids
-       │              │
-       └──────┬───────┘
-              ▼
-       buildPortfolioState()
-       (STRICT_SLTP_CHECK 可将跨日裸仓纳入恢复检查)
-              │
-              ▼
-       buildPreflightPlan()
-       (取消冲突挂单 / 合并重复 SL/TP / 同步或补挂 SL/TP)
-              │
-              ▼
-       buildActionPlan()
-       (持仓 vs 信号；MAX_HOLDINGS 限制新开仓)
-              │
-              ▼
-       executeAction()
-       ├─ NEW_BUY / ADD_POSITION:
-       │    智能取价 → BUY_PCT + RISK_PCT_PER_TRADE + MAX_POSITION_PCT 计算数量
-       │    → 限价买入/加仓 → 成交后挂单或同步 SL/TP
-       ├─ SELL_FULL / SELL_PARTIAL:
-       │    取消 SL/TP → 限价卖出 → 未全成时回滚剩余 SL/TP
-       └─ SYNC / RECOVER / MERGE / UPDATE / CANCEL:
-            顺序执行（致命错误终止，非致命跳过继续）
+```mermaid
+flowchart TD
+  DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓信号"]
+  API["Longbridge API<br/>stockPositions() / todayOrders() / historyOrders()"] --> Snapshot["cleanup snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
+
+  Signals --> SlTpRecord["querySlTpRecord()<br/>持仓保护单价格"]
+  Snapshot --> Cleanup["cleanup orphan / OCO orders<br/>collect completed record ids"]
+  Snapshot --> Portfolio["buildPortfolioState()<br/>STRICT_SLTP_CHECK 可将跨日裸仓纳入恢复检查"]
+  SlTpRecord --> Preflight["buildPreflightPlan()<br/>取消冲突挂单 / 合并重复 SL/TP / 同步或补挂 SL/TP"]
+  Cleanup --> Preflight
+  Portfolio --> Preflight
+
+  Preflight --> ActionPlan["buildActionPlan()<br/>持仓 vs 信号<br/>MAX_HOLDINGS 限制新开仓"]
+  ActionPlan --> Execute["executeAction()<br/>顺序执行；致命错误终止，非致命跳过继续"]
+
+  Execute --> Buy["NEW_BUY / ADD_POSITION<br/>智能取价<br/>BUY_PCT + RISK_PCT_PER_TRADE + MAX_POSITION_PCT 计算数量<br/>限价买入 / 加仓<br/>成交后挂单或同步 SL/TP"]
+  Execute --> Sell["SELL_FULL / SELL_PARTIAL<br/>取消 SL/TP<br/>限价卖出<br/>未全成时回滚剩余 SL/TP"]
+  Execute --> Maintenance["SYNC / RECOVER / MERGE / UPDATE / CANCEL<br/>同步、补挂、合并、改价或撤单"]
 ```
 
 **Action 类型**
