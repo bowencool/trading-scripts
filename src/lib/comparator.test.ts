@@ -192,6 +192,45 @@ test("buildActionPlan creates add-position action for held symbols with add sign
   assert.equal(plans[0]?.existingTpOrder?.orderId, "tp-1");
 });
 
+test("buildActionPlan skips new positions when max holdings is reached", () => {
+  const portfolio: PortfolioState = {
+    holdings: new Map([
+      [
+        "AAPL.US",
+        {
+          symbol: "AAPL.US",
+          quantity: 100,
+          availableQuantity: 100,
+          costPrice: 98,
+        },
+      ],
+    ]),
+    activeOrders: [],
+    orphanWarnings: [],
+  };
+
+  const plans = buildActionPlan(
+    portfolio,
+    [
+      makeRecord({
+        code: "MSFT",
+        operation_advice: "买入",
+        trend_prediction: "看多",
+      }),
+    ],
+    [],
+    new Map(),
+    2,
+    new Set(),
+    1,
+  );
+
+  assert.equal(
+    plans.some((plan) => plan.action === "NEW_BUY"),
+    false,
+  );
+});
+
 test("buildPreflightPlan cancels a stale pending buy when the latest signal turns sell", () => {
   const portfolio: PortfolioState = {
     holdings: new Map(),

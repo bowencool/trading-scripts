@@ -131,6 +131,8 @@ async function main(): Promise<void> {
   const buyPct = Number(process.env.BUY_PCT || "15");
   const sellPct = Number(process.env.SELL_PCT || "50");
   const riskPctPerTrade = Number(process.env.RISK_PCT_PER_TRADE || "1");
+  const maxPositionPct = Number(process.env.MAX_POSITION_PCT || "20");
+  const maxHoldings = Number(process.env.MAX_HOLDINGS || "0");
   if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
     console.error(
       `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
@@ -149,6 +151,16 @@ async function main(): Promise<void> {
     console.error(
       `错误: RISK_PCT_PER_TRADE 必须是 0-100 的数字，当前值: ${process.env.RISK_PCT_PER_TRADE}`,
     );
+    process.exit(1);
+  }
+  if (!Number.isFinite(maxPositionPct) || maxPositionPct < 0 || maxPositionPct > 100) {
+    console.error(
+      `错误: MAX_POSITION_PCT 必须是 0-100 的数字，当前值: ${process.env.MAX_POSITION_PCT}`,
+    );
+    process.exit(1);
+  }
+  if (!Number.isFinite(maxHoldings) || maxHoldings < 0 || !Number.isInteger(maxHoldings)) {
+    console.error(`错误: MAX_HOLDINGS 必须是非负整数，当前值: ${process.env.MAX_HOLDINGS}`);
     process.exit(1);
   }
 
@@ -268,6 +280,7 @@ async function main(): Promise<void> {
       slTpRecords,
       priceThresholdPct,
       completedBuySignalRecordIds,
+      maxHoldings,
     );
     printActionPlan("交易行动计划", dryRunActionPlan);
     console.log("\n🔍 [DRY RUN] 预检查与交易计划展示完毕，未执行任何操作。");
@@ -286,6 +299,7 @@ async function main(): Promise<void> {
     buyPct,
     sellPct,
     riskPctPerTrade,
+    maxPositionPct,
     priceThresholdPct,
   };
 
@@ -319,6 +333,7 @@ async function main(): Promise<void> {
     slTpRecords,
     priceThresholdPct,
     completedBuySignalRecordIds,
+    maxHoldings,
   );
   printActionPlan("交易行动计划", actionPlan);
 

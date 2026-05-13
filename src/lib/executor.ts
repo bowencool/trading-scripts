@@ -24,6 +24,7 @@ export interface ExecutorConfig {
   buyPct: number;
   sellPct: number;
   riskPctPerTrade: number;
+  maxPositionPct: number;
   priceThresholdPct: number;
 }
 
@@ -141,6 +142,7 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     autoApprove,
     buyPct,
     riskPctPerTrade,
+    maxPositionPct,
     priceThresholdPct,
   } = cfg;
   const { symbol, record, holding } = plan;
@@ -192,6 +194,8 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     netAssets,
     buyPct,
     riskPctPerTrade,
+    maxPositionPct,
+    existingPositionValue: holding ? holding.quantity * currentPriceNum : 0,
     entryPrice: threshold,
     stopLoss: record.stop_loss,
     lotSize,
@@ -223,6 +227,11 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     );
   } else {
     console.log("   风险预算: 未启用或缺少有效止损，按资金比例计算");
+  }
+  if (sizing.positionCapValue != null) {
+    console.log(
+      `   单标的上限: ${maxPositionPct}% = ${sizing.positionCapValue.toFixed(0)} ${currency} | 可追加上限: ${sizing.positionCapQuantity} 股`,
+    );
   }
   console.log(
     `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,

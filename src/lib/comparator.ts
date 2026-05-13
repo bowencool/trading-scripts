@@ -17,6 +17,7 @@ export function buildActionPlan(
   slTpRecords: Map<string, AnalysisRecord>,
   priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2"),
   completedBuySignalRecordIds: ReadonlySet<number> = new Set<number>(),
+  maxHoldings = Number(process.env.MAX_HOLDINGS || "0"),
 ): ActionPlan[] {
   const plans: ActionPlan[] = [];
   const { plans: conflictPlans, conflictSymbols } = buildConflictingPendingOrderPlans(
@@ -28,6 +29,17 @@ export function buildActionPlan(
   plans.push(...conflictPlans);
 
   const processedSymbols = new Set<string>(conflictSymbols);
+  const pendingBuySymbols = new Set(
+    portfolio.activeOrders.filter((order) => order.role === "buy").map((order) => order.symbol),
+  );
+  const currentOrPendingHoldingCount =
+    portfolio.holdings.size +
+    [...pendingBuySymbols].filter((symbol) => !portfolio.holdings.has(symbol)).length;
+  const maxNewPositions =
+    maxHoldings > 0
+      ? Math.max(0, maxHoldings - currentOrPendingHoldingCount)
+      : Number.POSITIVE_INFINITY;
+  let plannedNewPositions = 0;
 
   // ── Buy signals ─────────────────────────────────────────────────────────────
 
@@ -100,7 +112,14 @@ export function buildActionPlan(
       continue;
     }
 
+    if (plannedNewPositions >= maxNewPositions) {
+      console.log(`[SKIP] ${symbol} 已达到最大持仓数 ${maxHoldings}，跳过新开仓`);
+      processedSymbols.add(symbol);
+      continue;
+    }
+
     plans.push({ action: "NEW_BUY", symbol, record });
+    plannedNewPositions++;
     processedSymbols.add(symbol);
   }
 

@@ -3,6 +3,8 @@ export interface BuySizingInput {
   netAssets: number;
   buyPct: number;
   riskPctPerTrade: number;
+  maxPositionPct: number;
+  existingPositionValue: number;
   entryPrice: number;
   stopLoss: number | null;
   lotSize: number;
@@ -16,6 +18,8 @@ export interface BuySizingResult {
   riskBudgetValue: number | null;
   riskCapQuantity: number | null;
   riskPerShare: number | null;
+  positionCapValue: number | null;
+  positionCapQuantity: number | null;
 }
 
 function roundLot(quantity: number, lotSize: number): number {
@@ -26,6 +30,14 @@ function roundLot(quantity: number, lotSize: number): number {
 export function calculateBuyQuantity(input: BuySizingInput): BuySizingResult {
   const cashCapValue = (input.buyPower * input.buyPct) / 100;
   const cashCapQuantity = roundLot(cashCapValue / input.entryPrice, input.lotSize);
+  const hasPositionCap = input.maxPositionPct > 0 && input.netAssets > 0;
+  const positionCapValue = hasPositionCap ? (input.netAssets * input.maxPositionPct) / 100 : null;
+  const remainingPositionValue =
+    positionCapValue == null ? null : Math.max(0, positionCapValue - input.existingPositionValue);
+  const positionCapQuantity =
+    remainingPositionValue == null
+      ? null
+      : roundLot(remainingPositionValue / input.entryPrice, input.lotSize);
   const stopLoss = input.stopLoss;
 
   if (
@@ -35,13 +47,15 @@ export function calculateBuyQuantity(input: BuySizingInput): BuySizingResult {
     input.lotSize <= 0
   ) {
     return {
-      quantity: cashCapQuantity,
+      quantity: Math.min(cashCapQuantity, positionCapQuantity ?? Number.POSITIVE_INFINITY),
       mode: "cash_pct",
       cashCapValue,
       cashCapQuantity,
       riskBudgetValue: null,
       riskCapQuantity: null,
       riskPerShare: null,
+      positionCapValue,
+      positionCapQuantity,
     };
   }
 
@@ -51,12 +65,18 @@ export function calculateBuyQuantity(input: BuySizingInput): BuySizingResult {
   const riskCapQuantity = roundLot(riskBudgetValue / riskPerShare, input.lotSize);
 
   return {
-    quantity: Math.min(cashCapQuantity, riskCapQuantity),
+    quantity: Math.min(
+      cashCapQuantity,
+      riskCapQuantity,
+      positionCapQuantity ?? Number.POSITIVE_INFINITY,
+    ),
     mode: "risk_budget",
     cashCapValue,
     cashCapQuantity,
     riskBudgetValue,
     riskCapQuantity,
     riskPerShare,
+    positionCapValue,
+    positionCapQuantity,
   };
 }
