@@ -130,6 +130,7 @@ async function main(): Promise<void> {
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
   const buyPct = Number(process.env.BUY_PCT || "15");
   const sellPct = Number(process.env.SELL_PCT || "50");
+  const riskPctPerTrade = Number(process.env.RISK_PCT_PER_TRADE || "1");
   if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
     console.error(
       `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
@@ -142,6 +143,12 @@ async function main(): Promise<void> {
   }
   if (!Number.isFinite(sellPct) || sellPct <= 0 || sellPct > 100) {
     console.error(`错误: SELL_PCT 必须是 0-100 的正数，当前值: ${process.env.SELL_PCT}`);
+    process.exit(1);
+  }
+  if (!Number.isFinite(riskPctPerTrade) || riskPctPerTrade < 0 || riskPctPerTrade > 100) {
+    console.error(
+      `错误: RISK_PCT_PER_TRADE 必须是 0-100 的数字，当前值: ${process.env.RISK_PCT_PER_TRADE}`,
+    );
     process.exit(1);
   }
 
@@ -278,6 +285,7 @@ async function main(): Promise<void> {
     autoApprove: isAutoApprove,
     buyPct,
     sellPct,
+    riskPctPerTrade,
     priceThresholdPct,
   };
 

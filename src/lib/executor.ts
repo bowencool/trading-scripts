@@ -10,6 +10,7 @@ import {
 } from "longbridge";
 import { promptConfirm } from "./confirm.js";
 import type { OrderWatcher } from "./order-watcher.js";
+import { calculateBuyQuantity } from "./position-sizing.js";
 import { computeBuyLimitPrice } from "./pricing.js";
 import type { ActionPlan, ActiveOrder, AnalysisRecord } from "./types.js";
 
@@ -22,6 +23,7 @@ export interface ExecutorConfig {
   autoApprove: boolean;
   buyPct: number;
   sellPct: number;
+  riskPctPerTrade: number;
   priceThresholdPct: number;
 }
 
@@ -132,7 +134,15 @@ async function submitWithRetry(
 // ── Action executors ──────────────────────────────────────────────────────────
 
 async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> {
-  const { quoteCtx, tradeCtx, orderWatcher, autoApprove, buyPct, priceThresholdPct } = cfg;
+  const {
+    quoteCtx,
+    tradeCtx,
+    orderWatcher,
+    autoApprove,
+    buyPct,
+    riskPctPerTrade,
+    priceThresholdPct,
+  } = cfg;
   const { symbol, record, holding } = plan;
   const isAddPosition = plan.action === "ADD_POSITION";
   // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
@@ -169,17 +179,27 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     return;
   }
 
-  const buyPower = balances.length > 0 ? Number(balances[0].buyPower.toString()) : 0;
+  const balance = balances[0];
+  const buyPower = balance ? Number(balance.buyPower.toString()) : 0;
+  const netAssets = balance ? Number(balance.netAssets.toString()) : 0;
   if (buyPower <= 0) {
     console.log(`[SKIP] ${symbol} - 账户购买力不足（货币: ${currency}）`);
     return;
   }
-  const maxPositionValue = (buyPower * buyPct) / 100;
-  const sizingPrice = threshold;
-  const qty = Math.floor(maxPositionValue / sizingPrice / lotSize) * lotSize;
+
+  const sizing = calculateBuyQuantity({
+    buyPower,
+    netAssets,
+    buyPct,
+    riskPctPerTrade,
+    entryPrice: threshold,
+    stopLoss: record.stop_loss,
+    lotSize,
+  });
+  const qty = sizing.quantity;
   if (qty <= 0) {
     console.log(
-      `[SKIP] ${symbol} - 计算数量为 0（购买力 ${buyPower.toFixed(0)} ${currency} 的 ${buyPct}% = ${maxPositionValue.toFixed(0)}，不足一手）`,
+      `[SKIP] ${symbol} - 计算数量为 0（资金上限 ${sizing.cashCapValue.toFixed(0)} ${currency}，风险模式 ${sizing.mode}，不足一手）`,
     );
     return;
   }
@@ -192,8 +212,18 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     console.log(`   当前持仓: ${holding.quantity} 股 @ 成本 ${holding.costPrice}`);
   }
   console.log(
-    `   账户购买力: ${buyPower.toFixed(0)} ${currency} | 买入比例: ${buyPct}% | 可用金额: ${maxPositionValue.toFixed(0)} ${currency}`,
+    `   账户购买力: ${buyPower.toFixed(0)} ${currency} | 净资产: ${netAssets.toFixed(0)} ${currency}`,
   );
+  console.log(
+    `   资金上限: ${buyPct}% = ${sizing.cashCapValue.toFixed(0)} ${currency} | 单笔风险: ${riskPctPerTrade}%`,
+  );
+  if (sizing.mode === "risk_budget") {
+    console.log(
+      `   风险预算: ${sizing.riskBudgetValue?.toFixed(0)} ${currency} | 单股风险: ${sizing.riskPerShare?.toFixed(2)} | 风险上限: ${sizing.riskCapQuantity} 股`,
+    );
+  } else {
+    console.log("   风险预算: 未启用或缺少有效止损，按资金比例计算");
+  }
   console.log(
     `   方向: 买入 | 数量: ${qty}（${qty / lotSize}手 × ${lotSize}股/手）| 订单类型: 限价单 (LO)`,
   );
