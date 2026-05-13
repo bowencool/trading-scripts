@@ -22,6 +22,10 @@ import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
 // ── Display ───────────────────────────────────────────────────────────────────
 
+function parseBoolEnv(value: string | undefined): boolean {
+  return ["1", "true", "yes", "y"].includes((value ?? "").trim().toLowerCase());
+}
+
 const ACTION_LABEL: Record<ActionKind, string> = {
   CANCEL_CONFLICTING_ORDERS: "🚫 取消冲突挂单",
   NEW_BUY: "🆕 新建买入",
@@ -133,6 +137,7 @@ async function main(): Promise<void> {
   const riskPctPerTrade = Number(process.env.RISK_PCT_PER_TRADE || "1");
   const maxPositionPct = Number(process.env.MAX_POSITION_PCT || "20");
   const maxHoldings = Number(process.env.MAX_HOLDINGS || "0");
+  const strictSlTpCheck = parseBoolEnv(process.env.STRICT_SLTP_CHECK);
   if (!Number.isFinite(priceThresholdPct) || priceThresholdPct < 0 || priceThresholdPct > 100) {
     console.error(
       `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
@@ -204,12 +209,15 @@ async function main(): Promise<void> {
   // 2. Fetch portfolio state (holdings + active orders)
   console.log("\n📊 获取持仓和活跃订单...");
   const portfolio = shouldReuseCleanupSnapshot
-    ? buildPortfolioStateFromSnapshot({
-        positionsResp: cleanupSnapshot.positionsResp,
-        todayOrders: cleanupSnapshot.todayOrders,
-        historyOrdersResp: cleanupSnapshot.historyActiveOrders,
-      })
-    : await fetchPortfolioState(tradeCtx);
+    ? buildPortfolioStateFromSnapshot(
+        {
+          positionsResp: cleanupSnapshot.positionsResp,
+          todayOrders: cleanupSnapshot.todayOrders,
+          historyOrdersResp: cleanupSnapshot.historyActiveOrders,
+        },
+        strictSlTpCheck,
+      )
+    : await fetchPortfolioState(tradeCtx, strictSlTpCheck);
 
   console.log(`\n📊 持仓: ${portfolio.holdings.size} 只`);
   for (const [symbol, holding] of portfolio.holdings) {
@@ -321,7 +329,7 @@ async function main(): Promise<void> {
 
   if (actionablePreflight.length > 0) {
     console.log("\n🔄 预检查执行完成，刷新持仓和活跃订单...");
-    finalPortfolio = await fetchPortfolioState(tradeCtx);
+    finalPortfolio = await fetchPortfolioState(tradeCtx, strictSlTpCheck);
     console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
   }
 

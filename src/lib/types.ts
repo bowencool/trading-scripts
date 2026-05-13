@@ -52,7 +52,7 @@ export interface ActiveOrder {
 export interface PortfolioState {
   holdings: Map<string, Holding>;
   activeOrders: ActiveOrder[];
-  /** Symbols with a holding but no SL/TP orders detected (cross-day orphan warning). */
+  /** Symbols with a holding but no SL/TP orders detected and requiring recovery. */
   orphanWarnings: string[];
 }
 

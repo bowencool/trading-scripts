@@ -102,7 +102,10 @@ function toActiveOrder(order: {
  * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
  *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
  */
-export function buildPortfolioStateFromSnapshot(snapshot: PortfolioSnapshot): PortfolioState {
+export function buildPortfolioStateFromSnapshot(
+  snapshot: PortfolioSnapshot,
+  strictSlTpCheck = false,
+): PortfolioState {
   const { positionsResp, todayOrders, historyOrdersResp } = snapshot;
   const allPositions = positionsResp.channels.flatMap((ch) => ch.positions);
 
@@ -166,8 +169,8 @@ export function buildPortfolioStateFromSnapshot(snapshot: PortfolioSnapshot): Po
 
   const orphanWarnings: string[] = [];
   for (const symbol of holdings.keys()) {
-    if (!symbolsWithSlTp.has(symbol) && todayFilledBuys.has(symbol)) {
-      // Bought today but SL/TP not found → likely crash, needs recovery
+    if (!symbolsWithSlTp.has(symbol) && (todayFilledBuys.has(symbol) || strictSlTpCheck)) {
+      // Missing visible SL/TP and selected for recovery.
       orphanWarnings.push(symbol);
     } else if (!symbolsWithSlTp.has(symbol)) {
       // Cross-day holding without visible SL/TP → GTC orders exist, leave alone
@@ -176,9 +179,7 @@ export function buildPortfolioStateFromSnapshot(snapshot: PortfolioSnapshot): Po
   }
 
   if (orphanWarnings.length > 0) {
-    console.warn(
-      `[WARN] 以下今日买入的持仓缺少 SL/TP（可能是崩溃中断）: ${orphanWarnings.join(", ")}`,
-    );
+    console.warn(`[WARN] 以下持仓缺少 SL/TP，需要恢复检查: ${orphanWarnings.join(", ")}`);
   }
 
   return { holdings, activeOrders, orphanWarnings };
@@ -191,7 +192,10 @@ export function buildPortfolioStateFromSnapshot(snapshot: PortfolioSnapshot): Po
  * - For held symbols without SL/TP: check if a buy was filled today (→ needs RECOVER)
  *   vs. cross-day holding (→ SL/TP exists as GTC, don't touch)
  */
-export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<PortfolioState> {
+export async function fetchPortfolioState(
+  tradeCtx: TradeContext,
+  strictSlTpCheck = false,
+): Promise<PortfolioState> {
   const positionsResp = await tradeCtx.stockPositions();
 
   const endAt = new Date();
@@ -218,9 +222,12 @@ export async function fetchPortfolioState(tradeCtx: TradeContext): Promise<Portf
     }),
   ]);
 
-  return buildPortfolioStateFromSnapshot({
-    positionsResp,
-    todayOrders,
-    historyOrdersResp,
-  });
+  return buildPortfolioStateFromSnapshot(
+    {
+      positionsResp,
+      todayOrders,
+      historyOrdersResp,
+    },
+    strictSlTpCheck,
+  );
 }
