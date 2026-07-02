@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { queryAll } from "./db.js";
+import type { AnalysisRecord } from "./types.js";
 
 function withTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "trading-scripts-db-"));
@@ -36,20 +37,124 @@ function withTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
   }
 }
 
+function insertRecord(db: DatabaseSync, overrides: Partial<AnalysisRecord> = {}): void {
+  const record: AnalysisRecord = {
+    id: 1,
+    query_id: null,
+    code: "AAPL",
+    name: "Apple",
+    report_type: "agent",
+    sentiment_score: 65,
+    operation_advice: "观望",
+    trend_prediction: "震荡",
+    analysis_summary: null,
+    raw_result: null,
+    news_content: null,
+    context_snapshot: null,
+    ideal_buy: 100,
+    secondary_buy: null,
+    stop_loss: 95,
+    take_profit: 110,
+    created_at: "datetime('now')",
+    ...overrides,
+  };
+
+  db.prepare(`
+    INSERT INTO analysis_history (
+      id, code, name, report_type, sentiment_score, operation_advice,
+      trend_prediction, analysis_summary, ideal_buy, secondary_buy,
+      stop_loss, take_profit, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    record.id,
+    record.code,
+    record.name,
+    record.report_type,
+    record.sentiment_score,
+    record.operation_advice,
+    record.trend_prediction,
+    record.analysis_summary,
+    record.ideal_buy,
+    record.secondary_buy,
+    record.stop_loss,
+    record.take_profit,
+  );
+}
+
 test("queryAll keeps sell signals even when take_profit is missing", () => {
   withTempDb((dbPath, db) => {
-    db.prepare(`
-      INSERT INTO analysis_history (
-        id, code, name, report_type, sentiment_score, operation_advice,
-        trend_prediction, analysis_summary, ideal_buy, secondary_buy,
-        stop_loss, take_profit, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `).run(1, "AAPL", "Apple", "agent", 35, "卖出", "看空", null, 100, null, 95, null);
+    insertRecord(db, {
+      sentiment_score: 35,
+      operation_advice: "卖出",
+      trend_prediction: "看空",
+      take_profit: null,
+    });
 
     const result = queryAll(dbPath);
 
     assert.equal(result.sellSignals.length, 1);
     assert.equal(result.sellSignals[0]?.code, "AAPL");
     assert.equal(result.sellSignals[0]?.take_profit, null);
+  });
+});
+
+test("queryAll treats bullish trend on hold advice as buy signal", () => {
+  withTempDb((dbPath, db) => {
+    insertRecord(db, {
+      operation_advice: "持有",
+      trend_prediction: "看多",
+      ideal_buy: 100,
+    });
+
+    const result = queryAll(dbPath);
+
+    assert.equal(result.buySignals.length, 1);
+    assert.equal(result.buySignals[0]?.code, "AAPL");
+    assert.equal(result.sellSignals.length, 0);
+  });
+});
+
+test("queryAll treats strongly bearish trend on watch advice as sell signal", () => {
+  withTempDb((dbPath, db) => {
+    insertRecord(db, {
+      operation_advice: "观望",
+      trend_prediction: "强烈看空",
+    });
+
+    const result = queryAll(dbPath);
+
+    assert.equal(result.buySignals.length, 0);
+    assert.equal(result.sellSignals.length, 1);
+    assert.equal(result.sellSignals[0]?.code, "AAPL");
+  });
+});
+
+test("queryAll skips bullish trend buy signal without ideal buy price", () => {
+  withTempDb((dbPath, db) => {
+    insertRecord(db, {
+      operation_advice: "持有",
+      trend_prediction: "看多",
+      ideal_buy: null,
+    });
+
+    const result = queryAll(dbPath);
+
+    assert.equal(result.buySignals.length, 0);
+    assert.equal(result.sellSignals.length, 0);
+  });
+});
+
+test("queryAll keeps explicit operation advice ahead of trend prediction", () => {
+  withTempDb((dbPath, db) => {
+    insertRecord(db, {
+      operation_advice: "卖出",
+      trend_prediction: "看多",
+    });
+
+    const result = queryAll(dbPath);
+
+    assert.equal(result.buySignals.length, 0);
+    assert.equal(result.sellSignals.length, 1);
+    assert.equal(result.sellSignals[0]?.operation_advice, "卖出");
   });
 });

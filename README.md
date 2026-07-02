@@ -25,7 +25,7 @@
 
 ```mermaid
 flowchart TD
-  DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓信号"]
+  DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓<br/>看多 / 强烈看多 / 看空 / 强烈看空"]
   API["Longbridge API<br/>stockPositions() / todayOrders() / historyOrders()"] --> Snapshot["cleanup snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
 
   Signals --> SlTpRecord["querySlTpRecord()<br/>持仓保护单价格"]
@@ -47,10 +47,10 @@ flowchart TD
 
 | Action | 条件 | 行为 |
 | --- | --- | --- |
-| `NEW_BUY` | 不持仓 + 信号=买入 + 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
+| `NEW_BUY` | 不持仓 + 买入信号（买入，或持有/观望/空建议 + 看多/强烈看多）+ 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
 | `ADD_POSITION` | 已持仓 + 信号=加仓 + 无 pending 买单 | 限价加仓，成交后将 SL/TP 同步到新总持仓 |
 | `UPDATE_BUY` | 有 pending 买单 + 信号价格不一致 | `replaceOrder` 同步 |
-| `SELL_FULL` | 持仓 + 信号=卖出 | 取消 SL/TP → 限价卖出（挂买一） |
+| `SELL_FULL` | 持仓 + 卖出信号（卖出，或持有/观望/空建议 + 看空/强烈看空） | 取消 SL/TP → 限价卖出（挂买一） |
 | `SELL_PARTIAL` | 持仓 + 信号=减仓 | 取消 SL/TP → 限价卖 sellPct%（挂买一） |
 | `SYNC_SL_TP` | 持仓 + SL/TP 数量或价格 ≠ 信号 | `replaceOrder` 调整数量和/或价格 |
 | `RECOVER_SL_TP` | 持仓 + 无 SL/TP + 信号有止损止盈 | 补挂 MIT + LIT |

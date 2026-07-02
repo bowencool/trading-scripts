@@ -7,6 +7,9 @@ const COLUMNS = `id, code, name, report_type, sentiment_score,
 
 const BUY_ADVICE = new Set(["买入", "加仓"]);
 const SELL_ADVICE = new Set(["卖出", "减仓"]);
+const TREND_BUY = new Set(["看多", "强烈看多"]);
+const TREND_SELL = new Set(["看空", "强烈看空"]);
+const TREND_OVERRIDABLE_ADVICE = new Set(["", "持有", "观望"]);
 
 const A_SHARE_RE = /^[036]\d+$/;
 
@@ -106,8 +109,9 @@ export function queryAll(dbPath: string): {
     tradeSeen.set(record.code, record);
 
     const advice = record.operation_advice ?? "";
+    const trend = record.trend_prediction ?? "";
 
-    if (BUY_ADVICE.has(advice)) {
+    if (BUY_ADVICE.has(advice) || (TREND_OVERRIDABLE_ADVICE.has(advice) && TREND_BUY.has(trend))) {
       if (record.ideal_buy == null) {
         continue;
       }
@@ -115,7 +119,10 @@ export function queryAll(dbPath: string): {
       continue;
     }
 
-    if (SELL_ADVICE.has(advice)) {
+    if (
+      SELL_ADVICE.has(advice) ||
+      (TREND_OVERRIDABLE_ADVICE.has(advice) && TREND_SELL.has(trend))
+    ) {
       sellSignals.push(record);
     }
   }
