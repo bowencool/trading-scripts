@@ -8,6 +8,7 @@ import {
   TimeInForceType,
   type TradeContext,
 } from "longbridge";
+import { colors } from "./color.js";
 import { promptConfirm } from "./confirm.js";
 import type { OrderWatcher } from "./order-watcher.js";
 import { calculateBuyQuantity } from "./position-sizing.js";
@@ -92,16 +93,16 @@ function printAnalysisRecord(record: AnalysisRecord): void {
   console.log(`\n🔹 [${record.code}] ${record.name ?? "未知"} (${record.report_type ?? "-"})`);
 
   const parts: string[] = [];
-  if (record.sentiment_score != null) parts.push(`\x1b[36m${record.sentiment_score}\x1b[0m`);
+  if (record.sentiment_score != null) parts.push(colors.cyan(record.sentiment_score));
   if (record.operation_advice) parts.push(record.operation_advice);
   if (record.trend_prediction) parts.push(record.trend_prediction);
   if (parts.length > 0) console.log(`   评分 ${parts.join(" · ")}`);
 
   const prices: string[] = [];
-  if (record.ideal_buy != null) prices.push(`理想 \x1b[33m${record.ideal_buy}\x1b[0m`);
-  if (record.secondary_buy != null) prices.push(`次选 \x1b[33m${record.secondary_buy}\x1b[0m`);
-  if (record.stop_loss != null) prices.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
-  if (record.take_profit != null) prices.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  if (record.ideal_buy != null) prices.push(`理想 ${colors.yellow(record.ideal_buy)}`);
+  if (record.secondary_buy != null) prices.push(`次选 ${colors.yellow(record.secondary_buy)}`);
+  if (record.stop_loss != null) prices.push(`SL ${colors.red(record.stop_loss)}`);
+  if (record.take_profit != null) prices.push(`TP ${colors.green(record.take_profit)}`);
   if (prices.length > 0) console.log(`   ${prices.join(" · ")}`);
 
   if (record.analysis_summary) {
@@ -214,37 +215,37 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
   }
 
   console.log(
-    `\n📋 ${isAddPosition ? "加仓" : "买入"} ${symbol} | 现价 ${currentPriceNum}（${priceSource}）→ 限价 \x1b[33m${threshold}\x1b[0m（${priceThresholdPct}% 阈值）`,
+    `\n📋 ${isAddPosition ? "加仓" : "买入"} ${symbol} | 现价 ${currentPriceNum}（${priceSource}）→ 限价 ${colors.yellow(threshold)}（${priceThresholdPct}% 阈值）`,
   );
   console.log(`   记录 #${record.id} · ${record.created_at}`);
   if (holding) {
     console.log(
-      `   持仓 \x1b[36m${holding.quantity}\x1b[0m 股 @ 成本 \x1b[33m${holding.costPrice}\x1b[0m`,
+      `   持仓 ${colors.cyan(holding.quantity)} 股 @ 成本 ${colors.yellow(holding.costPrice)}`,
     );
   }
   console.log(
-    `   购买力 \x1b[36m${buyPower.toFixed(0)}\x1b[0m ${currency} | 资金上限 ${buyPct}% = ${sizing.cashCapValue.toFixed(0)} | 单笔风险 ${riskPctPerTrade}%`,
+    `   购买力 ${colors.cyan(buyPower.toFixed(0))} ${currency} | 资金上限 ${buyPct}% = ${sizing.cashCapValue.toFixed(0)} | 单笔风险 ${riskPctPerTrade}%`,
   );
   if (sizing.mode === "risk_budget") {
     console.log(
-      `   风险预算 ${sizing.riskBudgetValue?.toFixed(0)} ${currency} | 单股风险 ${sizing.riskPerShare?.toFixed(2)} | 上限 \x1b[36m${sizing.riskCapQuantity}\x1b[0m 股`,
+      `   风险预算 ${sizing.riskBudgetValue?.toFixed(0)} ${currency} | 单股风险 ${sizing.riskPerShare?.toFixed(2)} | 上限 ${colors.cyan(sizing.riskCapQuantity ?? "-")} 股`,
     );
   }
   if (sizing.positionCapValue != null) {
     console.log(
-      `   单标的上限 ${maxPositionPct}% = ${sizing.positionCapValue.toFixed(0)} | 追加上限 \x1b[36m${sizing.positionCapQuantity}\x1b[0m 股`,
+      `   单标的上限 ${maxPositionPct}% = ${sizing.positionCapValue.toFixed(0)} | 追加上限 ${colors.cyan(sizing.positionCapQuantity ?? "-")} 股`,
     );
   }
   const slTp: string[] = [];
-  if (record.stop_loss) slTp.push(`SL \x1b[31m${record.stop_loss}\x1b[0m (MIT)`);
-  if (record.take_profit) slTp.push(`TP \x1b[32m${record.take_profit}\x1b[0m (LIT)`);
+  if (record.stop_loss) slTp.push(`SL ${colors.red(record.stop_loss)} (MIT)`);
+  if (record.take_profit) slTp.push(`TP ${colors.green(record.take_profit)} (LIT)`);
   console.log(
-    `   买入 \x1b[36m${qty}\x1b[0m 股（${qty / lotSize} 手 × ${lotSize}）${slTp.length > 0 ? ` | ${slTp.join(" | ")}` : ""} | 10s 超时`,
+    `   买入 ${colors.cyan(qty)} 股（${qty / lotSize} 手 × ${lotSize}）${slTp.length > 0 ? ` | ${slTp.join(" | ")}` : ""} | 10s 超时`,
   );
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(
-      `\n确认以 \x1b[33m${threshold}\x1b[0m 买入 ${qty} 股？(Enter 确认 / Esc 取消): `,
+      `\n确认以 ${colors.yellow(threshold)} 买入 ${qty} 股？(Enter 确认 / Esc 取消): `,
     );
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
@@ -320,7 +321,7 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
   const pendingQty = Number(pendingBuyOrder.quantity);
 
   console.log(
-    `\n📋 更新买单 ${symbol} | 挂单 ${pendingPrice} → \x1b[33m${threshold}\x1b[0m | \x1b[36m${pendingQty}\x1b[0m 股`,
+    `\n📋 更新买单 ${symbol} | 挂单 ${pendingPrice} → ${colors.yellow(threshold)} | ${colors.cyan(pendingQty)} 股`,
   );
 
   if (!autoApprove) {
@@ -460,14 +461,14 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   const sellPrice = currentPrice;
 
   console.log(
-    `\n📋 ${isPartial ? "减仓" : "清仓"} ${symbol} | 现价 ${currentPrice}（${priceSource}）→ 卖出 \x1b[33m${sellPrice}\x1b[0m | \x1b[36m${sellQty}\x1b[0m 股`,
+    `\n📋 ${isPartial ? "减仓" : "清仓"} ${symbol} | 现价 ${currentPrice}（${priceSource}）→ 卖出 ${colors.yellow(sellPrice)} | ${colors.cyan(sellQty)} 股`,
   );
   console.log(`   记录 #${record.id} · ${record.created_at}`);
-  console.log(`   成本 \x1b[33m${costPrice}\x1b[0m`);
+  console.log(`   成本 ${colors.yellow(costPrice)}`);
 
   if (!autoApprove) {
     const confirmed = await promptConfirm(
-      `\n确认以 \x1b[33m${sellPrice}\x1b[0m 卖出 ${sellQty} 股？(Enter 确认 / Esc 取消): `,
+      `\n确认以 ${colors.yellow(sellPrice)} 卖出 ${sellQty} 股？(Enter 确认 / Esc 取消): `,
     );
     if (!confirmed) {
       console.log("[SKIP] 用户取消");
@@ -545,21 +546,21 @@ async function executeSyncSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promise<v
     const newTrigger = record.stop_loss;
     const oldQty = Number(existingSlOrder.quantity);
     if (oldTrigger !== newTrigger)
-      changes.push(`止损价 ${oldTrigger} → \x1b[31m${newTrigger}\x1b[0m`);
+      changes.push(`止损价 ${oldTrigger} → ${colors.red(newTrigger ?? "-")}`);
     if (oldQty !== holding.quantity)
-      changes.push(`止损量 ${oldQty} → \x1b[36m${holding.quantity}\x1b[0m`);
+      changes.push(`止损量 ${oldQty} → ${colors.cyan(holding.quantity)}`);
   }
   if (existingTpOrder) {
     const oldTrigger = Number(existingTpOrder.triggerPrice);
     const newTrigger = record.take_profit;
     const oldQty = Number(existingTpOrder.quantity);
     if (oldTrigger !== newTrigger)
-      changes.push(`止盈价 ${oldTrigger} → \x1b[32m${newTrigger}\x1b[0m`);
+      changes.push(`止盈价 ${oldTrigger} → ${colors.green(newTrigger ?? "-")}`);
     if (oldQty !== holding.quantity)
-      changes.push(`止盈量 ${oldQty} → \x1b[36m${holding.quantity}\x1b[0m`);
+      changes.push(`止盈量 ${oldQty} → ${colors.cyan(holding.quantity)}`);
   }
 
-  console.log(`\n📋 同步 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）`);
+  console.log(`\n📋 同步 SL/TP ${symbol}（${colors.cyan(holding.quantity)} 股）`);
   console.log(`   记录 #${record.id} · ${record.created_at}`);
   for (const c of changes) {
     console.log(`   ${c}`);
@@ -624,10 +625,10 @@ async function executeRecoverSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promis
   const missingTp = record.take_profit != null && !existingTpOrder;
 
   const missing: string[] = [];
-  if (missingSl) missing.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
-  if (missingTp) missing.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  if (missingSl) missing.push(`SL ${colors.red(record.stop_loss ?? "-")}`);
+  if (missingTp) missing.push(`TP ${colors.green(record.take_profit ?? "-")}`);
   console.log(
-    `\n📋 补挂 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）: ${missing.join(" · ")}`,
+    `\n📋 补挂 SL/TP ${symbol}（${colors.cyan(holding.quantity)} 股）: ${missing.join(" · ")}`,
   );
 
   if (!autoApprove) {
@@ -661,10 +662,10 @@ async function executeMergeSlTp(cfg: ExecutorConfig, plan: ActionPlan): Promise<
   const tpCount = ordersToCancel.filter((o) => o.role === "take_profit").length;
 
   const newSlTp: string[] = [];
-  if (record.stop_loss != null) newSlTp.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
-  if (record.take_profit != null) newSlTp.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+  if (record.stop_loss != null) newSlTp.push(`SL ${colors.red(record.stop_loss)}`);
+  if (record.take_profit != null) newSlTp.push(`TP ${colors.green(record.take_profit)}`);
   console.log(
-    `\n📋 合并 SL/TP ${symbol}（\x1b[36m${holding.quantity}\x1b[0m 股）: ${slCount} SL + ${tpCount} TP → ${newSlTp.join(" · ")}`,
+    `\n📋 合并 SL/TP ${symbol}（${colors.cyan(holding.quantity)} 股）: ${slCount} SL + ${tpCount} TP → ${newSlTp.join(" · ")}`,
   );
 
   if (!autoApprove) {

@@ -8,6 +8,7 @@ import {
   fetchCleanupSnapshot,
   formatCleanupAction,
 } from "./lib/cleanup.js";
+import { colors } from "./lib/color.js";
 import {
   buildActionPlan,
   buildPreflightPlan,
@@ -83,29 +84,29 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
 
     // Line 2: signal summary
     const parts: string[] = [];
-    if (record.sentiment_score != null) parts.push(`\x1b[36m${record.sentiment_score}\x1b[0m`);
+    if (record.sentiment_score != null) parts.push(colors.cyan(record.sentiment_score));
     if (record.operation_advice) parts.push(record.operation_advice);
     if (record.trend_prediction) parts.push(record.trend_prediction);
     if (parts.length > 0) console.log(`    评分 ${parts.join(" · ")}`);
 
     // Line 3: prices
     const prices: string[] = [];
-    if (record.ideal_buy != null) prices.push(`理想 \x1b[33m${record.ideal_buy}\x1b[0m`);
-    if (record.stop_loss != null) prices.push(`SL \x1b[31m${record.stop_loss}\x1b[0m`);
-    if (record.take_profit != null) prices.push(`TP \x1b[32m${record.take_profit}\x1b[0m`);
+    if (record.ideal_buy != null) prices.push(`理想 ${colors.yellow(record.ideal_buy)}`);
+    if (record.stop_loss != null) prices.push(`SL ${colors.red(record.stop_loss)}`);
+    if (record.take_profit != null) prices.push(`TP ${colors.green(record.take_profit)}`);
     if (prices.length > 0) console.log(`    ${prices.join(" · ")}`);
 
     // Line 4: holding (if any)
     if (plan.holding) {
       console.log(
-        `    持仓 \x1b[36m${plan.holding.quantity}\x1b[0m 股 (可用 ${plan.holding.availableQuantity}) @ 成本 \x1b[33m${plan.holding.costPrice}\x1b[0m`,
+        `    持仓 ${colors.cyan(plan.holding.quantity)} 股 (可用 ${plan.holding.availableQuantity}) @ 成本 ${colors.yellow(plan.holding.costPrice)}`,
       );
     }
 
     // Line 5: pending order
     if (plan.pendingBuyOrder) {
       console.log(
-        `    挂单 ${plan.pendingBuyOrder.orderId} @ \x1b[33m${plan.pendingBuyOrder.price}\x1b[0m`,
+        `    挂单 ${plan.pendingBuyOrder.orderId} @ ${colors.yellow(plan.pendingBuyOrder.price)}`,
       );
     }
 
