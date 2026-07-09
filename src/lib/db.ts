@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { AnalysisRecord } from "./types.js";
 
-const COLUMNS = `id, code, name, report_type, sentiment_score,
+const BASE_COLUMNS = `id, code, name, report_type, sentiment_score,
   operation_advice, trend_prediction, analysis_summary,
   ideal_buy, secondary_buy, stop_loss, take_profit, created_at`;
 
@@ -10,6 +10,9 @@ const SELL_ADVICE = new Set(["卖出", "减仓"]);
 const TREND_BUY = new Set(["看多", "强烈看多"]);
 const TREND_SELL = new Set(["看空", "强烈看空"]);
 const TREND_OVERRIDABLE_ADVICE = new Set(["", "持有", "观望"]);
+const STRUCTURED_BUY_ACTION = new Set(["buy", "add"]);
+const STRUCTURED_SELL_ACTION = new Set(["reduce", "sell"]);
+const STRUCTURED_NEUTRAL_ACTION = new Set(["hold", "watch", "avoid", "alert"]);
 
 const A_SHARE_RE = /^[036]\d+$/;
 
@@ -28,7 +31,7 @@ function fetchRaw(dbPath: string, hours: number): AnalysisRecord[] {
   try {
     return db
       .prepare(
-        `SELECT ${COLUMNS}
+        `SELECT ${selectColumns(db)}
          FROM analysis_history
          WHERE created_at >= datetime('now', '-${hours} hours')
          ORDER BY created_at DESC`,
@@ -48,7 +51,7 @@ function fetchLatestSlTpRecord(dbPath: string, code: string): AnalysisRecord | n
   try {
     const rows = db
       .prepare(
-        `SELECT ${COLUMNS}
+        `SELECT ${selectColumns(db)}
          FROM analysis_history
          WHERE code = ? AND (stop_loss IS NOT NULL OR take_profit IS NOT NULL)
          ORDER BY created_at DESC
@@ -72,6 +75,40 @@ export function computeRiskReward(r: AnalysisRecord): number | null {
   const risk = r.ideal_buy - r.stop_loss;
   if (risk <= 0) return null;
   return (r.take_profit - r.ideal_buy) / risk;
+}
+
+function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name?: unknown }>;
+  return rows.some((row) => row.name === columnName);
+}
+
+function selectColumns(db: DatabaseSync): string {
+  const rawResultColumn = tableHasColumn(db, "analysis_history", "raw_result")
+    ? "raw_result"
+    : "NULL AS raw_result";
+  return `${BASE_COLUMNS}, ${rawResultColumn}`;
+}
+
+function parseStructuredAction(rawResult: string | null): string | null {
+  if (!rawResult) return null;
+
+  try {
+    const parsed = JSON.parse(rawResult) as { action?: unknown };
+    return typeof parsed.action === "string" ? parsed.action.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRecordForStructuredAction(
+  record: AnalysisRecord,
+  action: string,
+): AnalysisRecord {
+  if (action === "add") return { ...record, operation_advice: "加仓" };
+  if (action === "reduce") return { ...record, operation_advice: "减仓" };
+  if (action === "buy") return { ...record, operation_advice: "买入" };
+  if (action === "sell") return { ...record, operation_advice: "卖出" };
+  return record;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -108,6 +145,26 @@ export function queryAll(dbPath: string): {
 
     tradeSeen.set(record.code, record);
 
+    const structuredAction = parseStructuredAction(record.raw_result);
+    if (structuredAction) {
+      if (STRUCTURED_BUY_ACTION.has(structuredAction)) {
+        if (record.ideal_buy == null) {
+          continue;
+        }
+        buySignals.push(normalizeRecordForStructuredAction(record, structuredAction));
+        continue;
+      }
+
+      if (STRUCTURED_SELL_ACTION.has(structuredAction)) {
+        sellSignals.push(normalizeRecordForStructuredAction(record, structuredAction));
+        continue;
+      }
+
+      if (STRUCTURED_NEUTRAL_ACTION.has(structuredAction)) {
+        continue;
+      }
+    }
+
     const advice = record.operation_advice ?? "";
     const trend = record.trend_prediction ?? "";
 
@@ -141,7 +198,7 @@ export function queryRecordById(dbPath: string, id: number): AnalysisRecord | nu
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     const rows = db
-      .prepare(`SELECT ${COLUMNS} FROM analysis_history WHERE id = ?`)
+      .prepare(`SELECT ${selectColumns(db)} FROM analysis_history WHERE id = ?`)
       .all(id) as unknown as AnalysisRecord[];
     return rows.length > 0 ? rows[0] : null;
   } finally {
@@ -159,7 +216,7 @@ export function querySlTpRecord(dbPath: string, code: string): AnalysisRecord | 
   try {
     const rows = db
       .prepare(
-        `SELECT ${COLUMNS}
+        `SELECT ${selectColumns(db)}
          FROM analysis_history
          WHERE code = ?
            AND created_at >= datetime('now', '-${SLTP_WINDOW_HOURS} hours')
