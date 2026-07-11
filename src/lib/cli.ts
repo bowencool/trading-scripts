@@ -34,7 +34,7 @@ Required:
 
 Options:
   --dry-run                 Show the trade plan without placing orders
-  --auto-approve             Skip interactive confirmations
+  --auto-approve            Skip interactive confirmations
   --help                    Show this help message`;
 
 function isMarketDataProvider(value: string): value is MarketDataProviderName {

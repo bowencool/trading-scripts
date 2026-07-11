@@ -29,7 +29,7 @@ function makeRecord(overrides: Partial<AnalysisRecord> = {}): AnalysisRecord {
 function makeOrder(overrides: Partial<ActiveOrder> = {}): ActiveOrder {
   return {
     orderId: "ord-1",
-    symbol: "AAPL.US",
+    symbol: "AAPL",
     side: "Sell",
     orderType: "MIT",
     price: "0",
@@ -46,9 +46,10 @@ test("buildActionPlan includes existing SL/TP orders on sell actions", () => {
   const portfolio: PortfolioState = {
     holdings: new Map([
       [
-        "AAPL.US",
+        "AAPL",
         {
-          symbol: "AAPL.US",
+          symbol: "AAPL",
+          instrument: { symbol: "AAPL", market: "US" },
           quantity: 100,
           availableQuantity: 100,
           costPrice: 98,
@@ -155,9 +156,10 @@ test("buildActionPlan creates add-position action for held symbols with add sign
   const portfolio: PortfolioState = {
     holdings: new Map([
       [
-        "AAPL.US",
+        "AAPL",
         {
-          symbol: "AAPL.US",
+          symbol: "AAPL",
+          instrument: { symbol: "AAPL", market: "US" },
           quantity: 100,
           availableQuantity: 100,
           costPrice: 98,
@@ -196,9 +198,10 @@ test("buildActionPlan skips new positions when max holdings is reached", () => {
   const portfolio: PortfolioState = {
     holdings: new Map([
       [
-        "AAPL.US",
+        "AAPL",
         {
-          symbol: "AAPL.US",
+          symbol: "AAPL",
+          instrument: { symbol: "AAPL", market: "US" },
           quantity: 100,
           availableQuantity: 100,
           costPrice: 98,
@@ -268,9 +271,10 @@ test("buildPreflightPlan cancels a stale pending sell when the latest signal tur
   const portfolio: PortfolioState = {
     holdings: new Map([
       [
-        "AAPL.US",
+        "AAPL",
         {
-          symbol: "AAPL.US",
+          symbol: "AAPL",
+          instrument: { symbol: "AAPL", market: "US" },
           quantity: 100,
           availableQuantity: 0,
           costPrice: 98,

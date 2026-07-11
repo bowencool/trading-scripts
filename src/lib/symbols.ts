@@ -1,3 +1,28 @@
+import type { Instrument } from "./providers/types.js";
+
+/** Convert a DB stock code to a provider-neutral instrument. */
+export function toInstrument(code: string): Instrument | null {
+  const trimmed = code.trim().toUpperCase();
+
+  if (trimmed.startsWith("HK")) {
+    const numPart = trimmed.slice(2);
+    if (/^\d{1,5}$/.test(numPart)) {
+      return { symbol: numPart.padStart(5, "0"), market: "HK" };
+    }
+    return null;
+  }
+
+  if (/^\d{5}$/.test(trimmed)) {
+    return { symbol: trimmed, market: "HK" };
+  }
+
+  if (/^[A-Z]+(\.[A-Z]+)?$/.test(trimmed)) {
+    return { symbol: trimmed, market: "US" };
+  }
+
+  return null;
+}
+
 /**
  * Convert a DB stock code to Longbridge symbol format.
  *
@@ -8,30 +33,8 @@
  * 4. Everything else → null (including 6-digit A-share codes)
  */
 export function toLongbridgeSymbol(code: string): string | null {
-  const trimmed = code.trim().toUpperCase();
-
-  // Rule 1: HK prefix
-  if (trimmed.startsWith("HK")) {
-    const numPart = trimmed.slice(2);
-    if (/^\d{1,5}$/.test(numPart)) {
-      return `${numPart.padStart(5, "0")}.HK`;
-    }
-    return null;
-  }
-
-  // Rule 2: 5-digit numeric = HK stock
-  if (/^\d{5}$/.test(trimmed)) {
-    return `${trimmed}.HK`;
-  }
-
-  // Rule 3: Alpha or alpha+dot = US stock
-  // Matches "AAPL", "BRK.B", "GOOG", etc.
-  if (/^[A-Z]+(\.[A-Z]+)?$/.test(trimmed)) {
-    return `${trimmed}.US`;
-  }
-
-  // Rule 4: Everything else (6-digit A-shares, unknown formats)
-  return null;
+  const instrument = toInstrument(code);
+  return instrument ? `${instrument.symbol}.${instrument.market}` : null;
 }
 
 const A_SHARE_RE = /^[036]\d+$/;

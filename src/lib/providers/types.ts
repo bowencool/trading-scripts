@@ -52,7 +52,7 @@ export interface Position {
   costPrice: number;
 }
 
-export type OrderSide = "buy" | "sell";
+export type OrderSide = "buy" | "sell" | "unknown";
 export type OrderType = "limit" | "market" | "market-if-touched" | "limit-if-touched" | "unknown";
 export type TimeInForce = "day" | "good-til-canceled" | "unknown";
 export type OrderRole = "buy" | "sell" | "stop_loss" | "take_profit" | "unknown";

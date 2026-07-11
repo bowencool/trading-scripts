@@ -1,3 +1,5 @@
+import type { Instrument } from "./providers/types.js";
+
 // ── DB record ─────────────────────────────────────────────────────────────────
 
 export interface AnalysisRecord {
@@ -24,6 +26,8 @@ export interface AnalysisRecord {
 
 export interface Holding {
   symbol: string;
+  /** Provider-neutral instrument identity. */
+  instrument: Instrument;
   /** 持仓总数量 */
   quantity: number;
   /** 可卖数量（未被待成交订单锁定） */
@@ -72,6 +76,7 @@ export type ActionKind =
 
 export interface ActionPlan {
   action: ActionKind;
+  instrument: Instrument;
   symbol: string;
   /** 触发此操作的信号记录 */
   record: AnalysisRecord;
