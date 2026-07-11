@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 ENV DB_PATH=/app/db/stock_analysis.db
+ENV MARKET_DATA_PROVIDER=longbridge
+ENV BROKER_PROVIDER=longbridge
 
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile && pnpm store prune
@@ -22,4 +24,4 @@ COPY tsconfig.json ./
 RUN mkdir -p /app/db && touch /app/.env
 
 ENTRYPOINT ["pnpm", "--silent"]
-CMD ["trade", "--market-data", "longbridge", "--broker", "longbridge"]
+CMD ["trade"]

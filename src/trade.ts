@@ -138,7 +138,7 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
 // ── 主程序 ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<number> {
-  const cli = parseTradeCliArgs(process.argv.slice(2));
+  const cli = parseTradeCliArgs(process.argv.slice(2), process.env);
   if (cli.kind === "help") {
     console.log(cli.usage);
     return 0;

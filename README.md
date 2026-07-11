@@ -82,12 +82,18 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 ### 3. 交易
 
 ``` bash
-pnpm trade --market-data longbridge --broker longbridge # 人工确认模式
-pnpm trade --market-data longbridge --broker longbridge --auto-approve # 全自动模式
-pnpm trade --market-data longbridge --broker longbridge --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
+pnpm trade # 人工确认模式，使用 .env 中的 Provider
+pnpm trade --auto-approve # 全自动模式
+pnpm trade --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 ```
 
-`--market-data` 与 `--broker` 均为必填参数，分别选择行情 Provider 和交易券商 Adapter；两者可以独立选择。当前可用值均只有 `longbridge`，后续接入其他券商时可以只切换其中一项。
+`MARKET_DATA_PROVIDER` 与 `BROKER_PROVIDER` 分别选择行情 Provider 和交易券商 Adapter，两者相互独立且都必须通过环境变量或 CLI 提供。CLI 优先级更高，可逐项覆盖环境变量：
+
+```bash
+pnpm trade --market-data longbridge --broker longbridge
+```
+
+当前两项可用值均只有 `longbridge`；后续接入其他券商时可以只切换其中一项。
 
 首次使用 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
@@ -100,23 +106,29 @@ docker pull ghcr.io/bowencool/trading-scripts:latest
 # 自动交易（人工确认模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge
+  ghcr.io/bowencool/trading-scripts trade
 
 # 自动交易（全自动模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge --auto-approve
+  ghcr.io/bowencool/trading-scripts trade --auto-approve
 
 # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge --dry-run
+  ghcr.io/bowencool/trading-scripts trade --dry-run
 
 ```
 
@@ -128,6 +140,8 @@ docker run --rm \
 | `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                                                                             |
 
 > **提示**：Docker 镜像内已固定 `DB_PATH=/app/db/stock_analysis.db`，不需要额外传 `DB_PATH` 环境变量；如需更换数据库文件，请调整宿主机挂载源路径，容器目标路径保持不变。
+
+> 镜像默认将两个 Provider 设为 `longbridge`。可以通过 `-e` 修改环境变量，也可以在 `trade` 后传 `--market-data` / `--broker` 逐项覆盖。
 
 > **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
 

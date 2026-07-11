@@ -20,17 +20,22 @@ export interface TradeCliOptions {
   autoApprove: boolean;
 }
 
+export interface TradeCliEnvironment {
+  readonly MARKET_DATA_PROVIDER?: string;
+  readonly BROKER_PROVIDER?: string;
+}
+
 export type TradeCliParseResult =
   | { kind: "run"; options: TradeCliOptions }
   | { kind: "help"; usage: string }
   | { kind: "error"; message: string; usage: string };
 
 export const TRADE_CLI_USAGE = `Usage:
-  pnpm trade --market-data <provider> --broker <provider> [options]
+  pnpm trade [--market-data <provider>] [--broker <provider>] [options]
 
-Required:
-  --market-data <provider>  Market data provider (${MARKET_DATA_PROVIDERS.join(", ")})
-  --broker <provider>       Broker provider (${BROKER_PROVIDERS.join(", ")})
+Provider selection (CLI overrides environment):
+  --market-data <provider>  Market data provider; fallback: MARKET_DATA_PROVIDER (${MARKET_DATA_PROVIDERS.join(", ")})
+  --broker <provider>       Broker provider; fallback: BROKER_PROVIDER (${BROKER_PROVIDERS.join(", ")})
 
 Options:
   --dry-run                 Show the trade plan without placing orders
@@ -50,7 +55,10 @@ function parseError(message: string): TradeCliParseResult {
 }
 
 /** Parse CLI arguments without creating providers or performing any I/O. */
-export function parseTradeCliArgs(argv: string[]): TradeCliParseResult {
+export function parseTradeCliArgs(
+  argv: string[],
+  env: TradeCliEnvironment = {},
+): TradeCliParseResult {
   let values: {
     "market-data"?: string;
     broker?: string;
@@ -74,20 +82,24 @@ export function parseTradeCliArgs(argv: string[]): TradeCliParseResult {
     return { kind: "help", usage: TRADE_CLI_USAGE };
   }
 
-  const marketData = values["market-data"];
-  if (!marketData) {
-    return parseError("Missing required option: --market-data");
+  const marketDataFromCli = values["market-data"];
+  const marketData = marketDataFromCli ?? env.MARKET_DATA_PROVIDER?.trim();
+  if (marketData == null || marketData === "") {
+    return parseError("Missing market data provider: use --market-data or MARKET_DATA_PROVIDER");
   }
   if (!isMarketDataProvider(marketData)) {
-    return parseError(`Unknown market data provider: ${marketData}`);
+    const source = marketDataFromCli == null ? "MARKET_DATA_PROVIDER" : "--market-data";
+    return parseError(`Unknown market data provider from ${source}: ${marketData}`);
   }
 
-  const broker = values.broker;
-  if (!broker) {
-    return parseError("Missing required option: --broker");
+  const brokerFromCli = values.broker;
+  const broker = brokerFromCli ?? env.BROKER_PROVIDER?.trim();
+  if (broker == null || broker === "") {
+    return parseError("Missing broker provider: use --broker or BROKER_PROVIDER");
   }
   if (!isBrokerProvider(broker)) {
-    return parseError(`Unknown broker provider: ${broker}`);
+    const source = brokerFromCli == null ? "BROKER_PROVIDER" : "--broker";
+    return parseError(`Unknown broker provider from ${source}: ${broker}`);
   }
 
   return {
