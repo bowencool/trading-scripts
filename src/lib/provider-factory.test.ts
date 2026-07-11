@@ -13,7 +13,7 @@ test("createProviders initializes Longbridge once and creates independent provid
 
   const providers = await createProviders(
     { marketData: "longbridge", broker: "longbridge" },
-    { longbridgeClientId: "client-id" },
+    { longbridgeOAuthClientId: "client-id" },
     {
       initializeLongbridge: async (clientId) => {
         initializedClientIds.push(clientId);

@@ -156,9 +156,9 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const clientId = process.env.CLIENT_ID;
+  const clientId = process.env.LONGBRIDGE_CLIENT_ID;
   if (!clientId) {
-    console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
+    console.error("错误: 请在 .env 中设置 LONGBRIDGE_CLIENT_ID（Longbridge OAuth client ID）");
     return 1;
   }
 
@@ -207,7 +207,7 @@ async function main(): Promise<number> {
   // 试运行也需要只读 provider 来获取投资组合状态。
   console.log(`🔐 正在连接行情 ${cli.options.marketData} / 交易 ${cli.options.broker}...`);
   const { marketData, broker } = await createProviders(cli.options, {
-    longbridgeClientId: clientId,
+    longbridgeOAuthClientId: clientId,
   });
   console.log(
     broker.protectionMode === "reconciled-orders"

@@ -12,7 +12,7 @@ export interface ProviderSelection {
 }
 
 export interface ProviderCredentials {
-  longbridgeClientId: string;
+  longbridgeOAuthClientId: string;
 }
 
 export interface ProviderBundle {
@@ -34,7 +34,7 @@ export async function createProviders(
   dependencies: ProviderFactoryDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<ProviderBundle> {
   // Initialize each selected vendor once. Market data and trading remain separate interfaces.
-  const longbridge = await dependencies.initializeLongbridge(credentials.longbridgeClientId);
+  const longbridge = await dependencies.initializeLongbridge(credentials.longbridgeOAuthClientId);
 
   return {
     marketData: selectMarketDataProvider(selection.marketData, longbridge),
