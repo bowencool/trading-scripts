@@ -22,4 +22,4 @@ COPY tsconfig.json ./
 RUN mkdir -p /app/db && touch /app/.env
 
 ENTRYPOINT ["pnpm", "--silent"]
-CMD ["trade"]
+CMD ["trade", "--market-data", "longbridge", "--broker", "longbridge"]

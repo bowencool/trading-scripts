@@ -1,6 +1,6 @@
 # trading-scripts
 
-基于 [Longbridge OpenAPI](https://open.longbridge.com) 的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
+行情源与交易券商相互独立的自动交易脚本。当前两类 Provider 均实现了 [Longbridge OpenAPI](https://open.longbridge.com)，脚本读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
 
 
 
@@ -18,8 +18,10 @@
 - SL/TP 自动同步：持仓数量或信号价格变化时自动调整挂单
 - SL/TP 自动补挂：持仓但无止损止盈时，从 24h 内信号（或最近记录）中恢复
 - 严格保护单检查：开启 `STRICT_SLTP_CHECK=true` 后，跨日持仓缺少可见 SL/TP 也会进入补挂检查
-- 孤儿订单清理：基于 `todayOrders()` API 自动撤销无父订单的 SL/TP + OCO 互斥清理
+- 孤儿订单清理：自动撤销无父订单的 SL/TP，并在下次脚本启动时清理已成交保护单的另一单
 - 支持人工确认和全自动 (`--auto-approve`) 两种模式
+
+> Longbridge 当前使用 `reconciled-orders` 保护模式：SL/TP 是两张独立订单，不是券商服务端的实时 OCO。其中一张成交后，另一张要等下一次脚本启动时才会被清理；两次运行之间存在两张订单先后成交的风险。
 
 ## 交易流程
 
@@ -80,12 +82,14 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 ### 3. 交易
 
 ``` bash
-pnpm trade # 人工确认模式
-pnpm trade --auto-approve # 全自动模式
-pnpm trade --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
+pnpm trade --market-data longbridge --broker longbridge # 人工确认模式
+pnpm trade --market-data longbridge --broker longbridge --auto-approve # 全自动模式
+pnpm trade --market-data longbridge --broker longbridge --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 ```
 
-首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+`--market-data` 与 `--broker` 均为必填参数，分别选择行情 Provider 和交易券商 Adapter；两者可以独立选择。当前可用值均只有 `longbridge`，后续接入其他券商时可以只切换其中一项。
+
+首次使用 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
 ## Docker
 
@@ -98,21 +102,21 @@ docker run --rm \
   -e CLIENT_ID=your-client-id \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade
+  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge
 
 # 自动交易（全自动模式）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade --auto-approve
+  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge --auto-approve
 
 # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
   -e CLIENT_ID=your-client-id \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
-  ghcr.io/bowencool/trading-scripts trade --dry-run
+  ghcr.io/bowencool/trading-scripts trade --market-data longbridge --broker longbridge --dry-run
 
 ```
 
