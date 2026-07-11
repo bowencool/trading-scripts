@@ -23,20 +23,6 @@ export function toInstrument(code: string): Instrument | null {
   return null;
 }
 
-/**
- * Convert a DB stock code to the legacy suffixed compatibility format.
- *
- * Rules (by priority):
- * 1. "HK01810" → "01810.HK" (HK prefix)
- * 2. "00700" (5-digit numeric) → "00700.HK" (HK stock)
- * 3. "AAPL", "BRK.B" (alpha or alpha+dot) → "AAPL.US", "BRK.B.US"
- * 4. Everything else → null (including 6-digit A-share codes)
- */
-export function toLongbridgeSymbol(code: string): string | null {
-  const instrument = toInstrument(code);
-  return instrument ? `${instrument.symbol}.${instrument.market}` : null;
-}
-
 const A_SHARE_RE = /^[036]\d+$/;
 
 /**
@@ -46,17 +32,13 @@ export function isAShare(code: string): boolean {
   return A_SHARE_RE.test(code.trim());
 }
 
-/**
- * 反向: 从伯注中提取符号 例如 "auto-trade:buy:123" → undefined
- * (伯注不包含符号 — 这是为了平例代码的预特位置)
- * 主要用于辨别我们的自动交易伯注
- */
+/** 判断订单备注是否由自动交易流程生成。 */
 export function isAutoTradeRemark(remark: string): boolean {
   return remark.startsWith("auto-trade:");
 }
 
 /**
- * 从伯注字符串中解析角色
+ * 从备注字符串中解析角色
  * "auto-trade:buy:123" → "buy", "auto-trade:sl:123" → "stop_loss" 等等
  */
 export function parseRemarkRole(
@@ -73,7 +55,7 @@ export function parseRemarkRole(
 }
 
 /**
- * 从伯注字符串中解析分析记录 ID
+ * 从备注字符串中解析分析记录 ID
  * "auto-trade:sl:123" → "123"
  */
 export function parseRemarkRecordId(remark: string): string | null {

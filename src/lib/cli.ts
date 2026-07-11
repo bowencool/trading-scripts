@@ -34,8 +34,8 @@ export const TRADE_CLI_USAGE = `Usage:
   pnpm trade [--market-data <provider>] [--broker <provider>] [options]
 
 Provider selection (CLI overrides environment):
-  --market-data <provider>  Market data provider; fallback: MARKET_DATA_PROVIDER (${MARKET_DATA_PROVIDERS.join(", ")})
-  --broker <provider>       Broker provider; fallback: BROKER_PROVIDER (${BROKER_PROVIDERS.join(", ")})
+  --market-data <provider>  Market data provider; environment: MARKET_DATA_PROVIDER (${MARKET_DATA_PROVIDERS.join(", ")})
+  --broker <provider>       Broker provider; environment: BROKER_PROVIDER (${BROKER_PROVIDERS.join(", ")})
 
 Options:
   --dry-run                 Show the trade plan without placing orders

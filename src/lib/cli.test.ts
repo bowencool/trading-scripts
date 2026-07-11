@@ -35,7 +35,11 @@ test("parseTradeCliArgs accepts equals syntax and existing boolean flags", () =>
 });
 
 test("parseTradeCliArgs returns help without requiring providers", () => {
-  assert.deepEqual(parseTradeCliArgs(["--help"]), { kind: "help", usage: TRADE_CLI_USAGE });
+  const result = parseTradeCliArgs(["--help"]);
+  assert.deepEqual(result, { kind: "help", usage: TRADE_CLI_USAGE });
+  assert.match(TRADE_CLI_USAGE, /environment: MARKET_DATA_PROVIDER/);
+  assert.match(TRADE_CLI_USAGE, /environment: BROKER_PROVIDER/);
+  assert.doesNotMatch(TRADE_CLI_USAGE, /fallback:/);
 });
 
 test("parseTradeCliArgs returns help before validating invalid environment values", () => {
@@ -48,7 +52,7 @@ test("parseTradeCliArgs returns help before validating invalid environment value
   );
 });
 
-test("parseTradeCliArgs falls back to environment providers", () => {
+test("parseTradeCliArgs uses providers from the environment", () => {
   assert.deepEqual(
     parseTradeCliArgs([], {
       MARKET_DATA_PROVIDER: "longbridge",
