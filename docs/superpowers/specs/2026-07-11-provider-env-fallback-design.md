@@ -18,6 +18,7 @@
 
 - README 同时展示显式 CLI 选择和环境变量回退两种运行方式，并说明 CLI 的覆盖优先级。
 - `.env.example` 增加 `MARKET_DATA_PROVIDER=longbridge` 与 `BROKER_PROVIDER=longbridge` 及对应注释。
+- 当前 Longbridge 实现的 OAuth 客户端 ID 固定使用 `LONGBRIDGE_CLIENT_ID`；这是硬改名，不兼容旧通用名称。
 - Docker 默认值和运行示例同步使用这两个环境变量；用户仍可通过容器命令行参数覆盖它们。
 
 ## 测试矩阵
@@ -37,3 +38,4 @@
 - `--dry-run`、`--auto-approve` 和现有 Provider factory 接口保持不变。
 - 不引入隐式默认 Provider；CLI 与环境变量都缺失时必须报错。
 - 行情与交易选择保持独立，不要求两者来自同一供应商。
+- 通用 Provider 选择不读取认证信息；选中 Longbridge 后才校验 `LONGBRIDGE_CLIENT_ID`。

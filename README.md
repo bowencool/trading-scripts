@@ -1,15 +1,15 @@
 # trading-scripts
 
-行情源与交易券商相互独立的自动交易脚本。当前两类 Provider 均实现了 [Longbridge OpenAPI](https://open.longbridge.com)，脚本读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
+行情源与交易券商相互独立的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。当前行情 Provider 与 Broker Adapter 均由 [Longbridge OpenAPI](https://open.longbridge.com) 实现。
 
 
 
 ## 功能
 
 - 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
-- **实时持仓对比**：从 Longbridge API 获取持仓和活跃订单，与信号做对比，无需本地状态文件
+- **实时持仓对比**：通过 Broker Adapter 获取持仓和活跃订单，与信号做对比，无需本地状态文件
 - 自动过滤 A 股，仅处理港股和美股标的
-- **智能取价**：优先使用盘口深度（卖一/买一），其次盘前/盘后/夜盘价格，最后 `lastDone`
+- **智能取价**：通过 MarketDataProvider 获取盘口和分时段报价，优先使用卖一/买一，其次盘前/盘后/夜盘价格，最后使用最新价
 - 买入信号：以阈值最高价（目标价 × (1 + 阈值%)）提交限价单 (LO)，10 秒超时未成交则跳过
 - 买入数量：先按 `BUY_PCT` 限制可用购买力，再按 `RISK_PCT_PER_TRADE` 和止损价限制单笔最大风险
 - 组合约束：支持 `MAX_POSITION_PCT` 单标的上限和 `MAX_HOLDINGS` 最大持仓标的数
@@ -27,11 +27,15 @@
 
 ```mermaid
 flowchart TD
+  Config["Config<br/>CLI / env"] --> Factory["ProviderFactory"]
+  Factory --> Market["MarketDataProvider<br/>盘口 / 分时段报价 / 最新价"]
+  Factory --> Broker["BrokerAdapter<br/>账户 / 持仓 / 订单"]
   DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓<br/>看多 / 强烈看多 / 看空 / 强烈看空"]
-  API["Longbridge API<br/>stockPositions() / todayOrders() / historyOrders()"] --> Snapshot["cleanup snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
+  Market --> Execute
+  Broker --> Snapshot["provider-neutral snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
 
   Signals --> SlTpRecord["querySlTpRecord()<br/>持仓保护单价格"]
-  Snapshot --> Cleanup["cleanup orphan / OCO orders<br/>collect completed record ids"]
+  Snapshot --> Cleanup["reconcile protection orders<br/>collect completed record ids"]
   Snapshot --> Portfolio["buildPortfolioState()<br/>STRICT_SLTP_CHECK 可将跨日裸仓纳入恢复检查"]
   SlTpRecord --> Preflight["buildPreflightPlan()<br/>取消冲突挂单 / 合并重复 SL/TP / 同步或补挂 SL/TP"]
   Cleanup --> Preflight
@@ -61,7 +65,9 @@ flowchart TD
 
 ## 快速开始
 
-### 1. 注册 OAuth Client
+### 1. 配置当前 Longbridge 实现
+
+在 Longbridge 注册 OAuth Client：
 
 ```bash
 curl -X POST https://openapi.longbridge.com/oauth2/register \
@@ -73,7 +79,7 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
   }'
 ```
 
-保存返回的 `client_id`。
+保存返回的 `client_id`，并在 `.env` 中配置为 `LONGBRIDGE_CLIENT_ID`。
 
 ### 2. 配置环境变量
 
@@ -95,7 +101,7 @@ pnpm trade --market-data longbridge --broker longbridge
 
 当前两项可用值均只有 `longbridge`；后续接入其他券商时可以只切换其中一项。
 
-首次使用 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+首次使用当前 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
 ## Docker
 
@@ -105,7 +111,7 @@ docker pull ghcr.io/bowencool/trading-scripts:latest
 
 # 自动交易（人工确认模式）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
   -e MARKET_DATA_PROVIDER=longbridge \
   -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
@@ -114,7 +120,7 @@ docker run --rm \
 
 # 自动交易（全自动模式）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
   -e MARKET_DATA_PROVIDER=longbridge \
   -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
@@ -123,7 +129,7 @@ docker run --rm \
 
 # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
   -e MARKET_DATA_PROVIDER=longbridge \
   -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \

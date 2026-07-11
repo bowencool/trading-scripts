@@ -1,3 +1,12 @@
+## Provider / Broker 架构约束
+
+- 行情源与交易券商是两个独立选择：业务层分别依赖 `MarketDataProvider` 与 `BrokerAdapter`，不得假定两者来自同一供应商。
+- 业务层只使用 provider-neutral 的领域类型，不得直接导入券商 SDK、Context、Decimal、供应商枚举或供应商响应类型。
+- 券商 SDK 调用、symbol/状态/订单类型映射、认证细节和供应商特有限制必须留在对应 Provider 的实现边界；通用代码注释也不得描述某家供应商的调用步骤。
+- Provider 选择逐项遵循 `CLI > env > error`：`--market-data` 覆盖 `MARKET_DATA_PROVIDER`，`--broker` 覆盖 `BROKER_PROVIDER`，且校验必须早于认证与连接。
+- Longbridge 认证环境变量固定为 `LONGBRIDGE_CLIENT_ID`，不得重新引入含义模糊的通用认证变量名。
+- Longbridge 的保护模式是 `reconciled-orders`，不是实时或服务端原生 OCO；一张保护单成交后，另一张在下次脚本启动时清理。
+
 ## 数据源
 
 表：analysis_history（分析结果历史记录），该表来自其他项目，为只读表。
@@ -55,4 +64,4 @@ created_at (DateTime, default=datetime.now, index)
 
 ## 注意事项
 
-- 代码中调用 API 要顺序调用，是因为 API 会限制调用频率，已有代码也不用优化
+- 所有 Provider API 调用必须保持顺序执行，不做并发优化；供应商的具体限流细节留在对应实现层

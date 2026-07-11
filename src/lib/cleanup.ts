@@ -167,7 +167,7 @@ function normalizeCleanupSnapshot(snapshot: CleanupSnapshot): {
 export async function fetchCleanupSnapshot(broker: BrokerAdapter): Promise<CleanupSnapshot> {
   const endAt = new Date();
   const startAt = new Date(endAt.getTime() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
-  // Longbridge is sensitive to request bursts. Keep these calls sequential.
+  // Keep broker snapshot calls sequential; adapters may enforce request-rate limits.
   const positions = await broker.getPositions();
   await delay(API_DELAY_MS);
   const todayOrders = await broker.listOrders({ scope: "today" });

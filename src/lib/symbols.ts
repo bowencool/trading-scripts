@@ -24,7 +24,7 @@ export function toInstrument(code: string): Instrument | null {
 }
 
 /**
- * Convert a DB stock code to Longbridge symbol format.
+ * Convert a DB stock code to the legacy suffixed compatibility format.
  *
  * Rules (by priority):
  * 1. "HK01810" → "01810.HK" (HK prefix)

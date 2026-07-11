@@ -1,7 +1,7 @@
 {
   "name": "trading-scripts",
   "version": "2.4.0",
-  "description": "基于 Longbridge API 的自动交易脚本",
+  "description": "行情 Provider 与交易 Broker 可独立选择的自动交易脚本",
   "private": true,
   "scripts": {
     "trade": "tsx --env-file=.env src/trade.ts",

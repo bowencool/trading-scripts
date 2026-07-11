@@ -31,8 +31,9 @@ flowchart TD
 
 ## 运行与错误边界
 
-- `--market-data` 与 `--broker` 分别选择实现；参数校验必须早于认证、API 连接和启动清理。
-- Longbridge API 保持顺序调用限制。行情与交易可共享认证配置，但不得共享 Context 或在业务层互相依赖。
+- Provider 选择逐项遵循 `CLI > env > error`：`--market-data` 覆盖 `MARKET_DATA_PROVIDER`，`--broker` 覆盖 `BROKER_PROVIDER`；完整规则见 [Provider 环境变量回退设计](./2026-07-11-provider-env-fallback-design.md)。选择校验必须早于认证、API 连接和启动清理。
+- Longbridge OAuth 客户端 ID 只从 `LONGBRIDGE_CLIENT_ID` 读取；该硬改名不保留旧通用名称回退。
+- 所有 Provider API 调用保持顺序执行，不做并发优化；供应商的具体限流细节留在对应实现层。行情与交易可共享认证配置，但不得共享 Context 或在业务层互相依赖。
 - 供应商错误可保留原始异常作为 cause；业务层只依赖统一返回类型。无法映射的订单状态标为 unknown，不伪装为终态。
 - dry-run 可以读取账户、订单和行情，但不得提交、修改、撤销订单；清理只返回计划结果。
 
@@ -47,4 +48,4 @@ flowchart TD
 
 - 本次不实现 Schwab、不新增常驻守护进程、不改变策略和仓位算法、不修改数据库结构。
 - `analysis_history` 继续只读；Longbridge remark 格式和幂等识别保持不变。
-- Provider 只通过必填 CLI 参数选择，不新增用于选择 Provider 的环境变量。
+- 行情与交易选择保持独立；CLI 和环境变量使用相同 allowlist，二者都缺失时才报错。
