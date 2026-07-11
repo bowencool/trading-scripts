@@ -4,7 +4,7 @@
 - 业务层只使用 provider-neutral 的领域类型，不得直接导入券商 SDK、Context、Decimal、供应商枚举或供应商响应类型。
 - 券商 SDK 调用、symbol/状态/订单类型映射、认证细节和供应商特有限制必须留在对应 Provider 的实现边界；通用代码注释也不得描述某家供应商的调用步骤。
 - Provider 选择逐项遵循 `CLI > env > error`：`--market-data` 覆盖 `MARKET_DATA_PROVIDER`，`--broker` 覆盖 `BROKER_PROVIDER`，且校验必须早于认证与连接。
-- Longbridge 认证环境变量固定为 `LONGBRIDGE_CLIENT_ID`，不得重新引入含义模糊的通用认证变量名。
+- Longbridge 认证环境变量为 `LONGBRIDGE_CLIENT_ID`。
 - Longbridge 的保护模式是 `reconciled-orders`，不是实时或服务端原生 OCO；一张保护单成交后，另一张在下次脚本启动时清理。
 
 ## 数据源

@@ -99,7 +99,7 @@ pnpm trade --dry-run # 试运行（连接交易所，展示“启动前预检查
 pnpm trade --market-data longbridge --broker longbridge
 ```
 
-当前两项可用值均只有 `longbridge`；后续接入其他券商时可以只切换其中一项。
+当前两项可用值均只有 `longbridge`，行情和交易配置相互独立。
 
 首次使用当前 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
