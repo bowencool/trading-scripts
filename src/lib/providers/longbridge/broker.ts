@@ -369,16 +369,20 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
 
   async stop(): Promise<void> {
     if (!this.started) return;
-    await this.tradeContext.unsubscribe([TopicType.Private]);
     this.started = false;
-
-    for (const [orderId, pending] of this.pendingWaits) {
-      pending.reject(new Error(`Broker adapter stopped while waiting for order ${orderId}`));
+    try {
+      await this.tradeContext.unsubscribe([TopicType.Private]);
+    } catch (error) {
+      console.warn(`[WARN] 取消 Longbridge 订单推送订阅失败: ${error}`);
+    } finally {
+      for (const [orderId, pending] of this.pendingWaits) {
+        pending.reject(new Error(`Broker adapter stopped while waiting for order ${orderId}`));
+      }
+      this.pendingWaits.clear();
+      this.terminalEvents.clear();
+      for (const timer of this.timers.values()) clearTimeout(timer);
+      this.timers.clear();
     }
-    this.pendingWaits.clear();
-    this.terminalEvents.clear();
-    for (const timer of this.timers.values()) clearTimeout(timer);
-    this.timers.clear();
   }
 
   private async getCleanupSnapshot() {

@@ -125,3 +125,51 @@ test("syncProtectionOrders still updates take profit when stop loss replacement 
   );
   assert.deepEqual(replaced, ["sl-1", "tp-1"]);
 });
+
+test("stop cleans local state when unsubscribe fails", async () => {
+  const adapter = Object.create(LongbridgeBrokerAdapter.prototype) as LongbridgeBrokerAdapter;
+  let unsubscribeCalls = 0;
+  let cancelCalls = 0;
+  const tradeContext = {
+    setOnOrderChanged: () => {},
+    subscribe: async () => {},
+    unsubscribe: async () => {
+      unsubscribeCalls += 1;
+      throw new Error("connection closed");
+    },
+    cancelOrder: async () => {
+      cancelCalls += 1;
+    },
+  };
+  const pendingWaits = new Map();
+  const terminalEvents = new Map([["cached-order", {}]]);
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  Object.assign(adapter, { tradeContext, pendingWaits, terminalEvents, timers, started: false });
+
+  const originalWarn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (message) => warnings.push(String(message));
+
+  try {
+    await adapter.start();
+    const pendingOrder = adapter.waitForTerminal("order-1", 10);
+
+    await adapter.stop();
+
+    await assert.rejects(pendingOrder, /Broker adapter stopped while waiting for order order-1/);
+    assert.equal(unsubscribeCalls, 1);
+    assert.equal(pendingWaits.size, 0);
+    assert.equal(terminalEvents.size, 0);
+    assert.equal(timers.size, 0);
+    assert.match(warnings[0] ?? "", /connection closed/);
+    await assert.rejects(adapter.waitForTerminal("order-2"), /start\(\) must be called/);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(cancelCalls, 0);
+
+    await adapter.stop();
+    assert.equal(unsubscribeCalls, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
