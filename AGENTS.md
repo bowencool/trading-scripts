@@ -11,6 +11,13 @@
 
 表：analysis_history（分析结果历史记录），该表来自其他项目，为只读表。
 
+当前交易信号解析顺序：
+
+1. 优先读取 `raw_result` JSON 顶层的 `action` 字段：`buy`/`add` 归买入侧，`reduce`/`sell` 归卖出侧，`hold`/`watch`/`avoid`/`alert` 归中性不交易；结构化动作存在且有效时优先于文本字段。
+2. 如果没有有效结构化动作，再读取 `operation_advice`：`买入`/`加仓` 归买入侧，`卖出`/`减仓` 归卖出侧。
+3. 如果 `operation_advice` 为 `持有`/`观望`/空，再用 `trend_prediction` 兜底：`看多`/`强烈看多` 归买入侧，`看空`/`强烈看空` 归卖出侧；`震荡`、`震荡偏多`、`震荡偏空` 等模糊值不自动触发交易。
+4. 所有买入侧信号都必须有 `ideal_buy`；缺失时跳过买入信号。卖出侧信号不要求 `take_profit`。
+
 id (Integer, PK, autoincrement)
 主键，自增的记录 ID，用于精确定位一条历史记录（在批量分析时推荐用此字段保证唯一性）。
 
@@ -30,16 +37,16 @@ sentiment_score (Integer)
 综合情绪/评分，代码里是 0-100 的整数（注：analyzer 中注释说明 >70 强烈看多，>60 看多，40-60 震荡，<40 看空）。用于量化 AI 的情绪倾向。
 
 operation_advice (String(20))
-操作建议短文本，例如 "买入"/"加仓"/"持有"/"减仓"/"卖出"/"观望" 等（在保存时会把 AnalysisResult.operation_advice 的值写入该字段）。
+操作建议短文本，例如 "买入"/"加仓"/"持有"/"减仓"/"卖出"/"观望" 等（在保存时会把 AnalysisResult.operation_advice 的值写入该字段）。没有有效 `raw_result.action` 时，该字段用于交易信号归类；明确的买入/加仓/卖出/减仓优先于趋势预测。
 
 trend_prediction (String(50))
-趋势预测的文本标签，例如 "强烈看多"/"看多"/"震荡"/"看空"/"强烈看空"（来自 AnalysisResult.trend_prediction）。
+趋势预测的文本标签，例如 "强烈看多"/"看多"/"震荡"/"看空"/"强烈看空"（来自 AnalysisResult.trend_prediction）。仅在没有有效 `raw_result.action`，且 `operation_advice` 为持有/观望/空时参与兜底归类：看多/强烈看多为买入侧，看空/强烈看空为卖出侧。
 
 analysis_summary (Text)
 综合分析的摘要文本（例如 100 字的总结），适合在列表或卡片中展示的简短结论。
 
 raw_result (Text)
-原始分析结果的 JSON 字符串（由 _build_raw_result 序列化）。通常包含更完整的结构化内容（dashboard、各模块详情、raw_response、data_sources 等），用于调试或前端构建完整报告。
+原始分析结果的 JSON 字符串（由 _build_raw_result 序列化）。通常包含更完整的结构化内容（dashboard、各模块详情、raw_response、data_sources 等），用于调试或前端构建完整报告。若顶层包含 `action`，交易脚本优先使用它归类信号：`buy`/`add`、`reduce`/`sell`、`hold`/`watch`/`avoid`/`alert`。
 
 news_content (Text)
 与该次分析相关联的新闻/消息内容（简单字符串或汇总），不是完整的 news_intel 表行，而是本次分析所提取到的新闻摘要或合并文本。
@@ -48,7 +55,7 @@ context_snapshot (Text)
 保存的上下文快照（JSON 字符串），例如当次用于分析的行情/基本面片段、market_snapshot 等。保存时可以选择关闭（save_snapshot 参数），用于回溯/解释。
 
 ideal_buy (Float)
-“狙击点位”——首选买入价（浮点）。从分析结果的 battle_plan/sniper_points 等位置提取并经过解析（见 _parse_sniper_value，能处理 "18.50元"、"18.5-19.0"、带括号文本等）。
+“狙击点位”——首选买入价（浮点）。从分析结果的 battle_plan/sniper_points 等位置提取并经过解析（见 _parse_sniper_value，能处理 "18.50元"、"18.5-19.0"、带括号文本等）。所有买入侧信号（包括结构化 action、operation_advice、trend_prediction 兜底）都要求该字段非空。
 
 secondary_buy (Float)
 次级买点（浮点），与 ideal_buy 一样用于回测/模拟执行。
