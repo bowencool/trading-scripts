@@ -2,6 +2,8 @@ import type { Instrument } from "../types.js";
 
 const LONGBRIDGE_MARKET_SUFFIXES = new Set(["US", "HK", "SH", "SZ", "SG"]);
 
+class UnsupportedLongbridgeMarketError extends Error {}
+
 function normalizedBaseSymbol(instrument: Instrument): string {
   const symbol = instrument.symbol.trim().toUpperCase();
   const suffix = symbol.split(".").at(-1);
@@ -52,6 +54,16 @@ export function fromLongbridgeSymbol(symbol: string): Instrument {
     case "SG":
       return { symbol: baseSymbol, market: "SG" };
     default:
-      throw new Error(`Unsupported Longbridge market suffix: ${suffix}`);
+      throw new UnsupportedLongbridgeMarketError(`Unsupported Longbridge market suffix: ${suffix}`);
+  }
+}
+
+/** Convert a Longbridge symbol unless its market is outside the provider-neutral domain. */
+export function fromLongbridgeSymbolIfSupported(symbol: string): Instrument | undefined {
+  try {
+    return fromLongbridgeSymbol(symbol);
+  } catch (error) {
+    if (error instanceof UnsupportedLongbridgeMarketError) return undefined;
+    throw error;
   }
 }

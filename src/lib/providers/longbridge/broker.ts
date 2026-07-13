@@ -21,6 +21,7 @@ import {
   type BrokerOrder,
   type CleanupResult,
   type Currency,
+  type Instrument,
   isTerminalOrderStatus,
   type OrderQuery,
   type OrderRole,
@@ -34,7 +35,11 @@ import {
   type SyncProtectionRequest,
   type TimeInForce,
 } from "../types.js";
-import { fromLongbridgeSymbol, toLongbridgeSymbol } from "./symbols.js";
+import {
+  fromLongbridgeSymbol,
+  fromLongbridgeSymbolIfSupported,
+  toLongbridgeSymbol,
+} from "./symbols.js";
 
 const CANCEL_PUSH_GRACE_MS = 10_000;
 const MAX_SUBMIT_RETRIES = 2;
@@ -86,14 +91,23 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
 
   async getPositions(): Promise<Position[]> {
     const response = await this.tradeContext.stockPositions();
-    return response.channels.flatMap((channel) =>
-      channel.positions.map((position) => ({
-        instrument: fromLongbridgeSymbol(position.symbol),
-        quantity: Number(position.quantity.toString()),
-        availableQuantity: Number(position.availableQuantity.toString()),
-        costPrice: Number(position.costPrice.toString()),
-      })),
-    );
+    const positions: Position[] = [];
+    for (const channel of response.channels) {
+      for (const position of channel.positions) {
+        const instrument = fromLongbridgeSymbolIfSupported(position.symbol);
+        if (!instrument) {
+          console.warn(`[WARN] 跳过不支持市场的 Longbridge 持仓: ${position.symbol}`);
+          continue;
+        }
+        positions.push({
+          instrument,
+          quantity: Number(position.quantity.toString()),
+          availableQuantity: Number(position.availableQuantity.toString()),
+          costPrice: Number(position.costPrice.toString()),
+        });
+      }
+    }
+    return positions;
   }
 
   async listOrders(query: OrderQuery = {}): Promise<BrokerOrder[]> {
@@ -111,7 +125,16 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
           })
         : await this.tradeContext.todayOrders(options);
 
-    return orders.map(mapLongbridgeOrder);
+    const mappedOrders: BrokerOrder[] = [];
+    for (const order of orders) {
+      const instrument = fromLongbridgeSymbolIfSupported(order.symbol);
+      if (!instrument) {
+        console.warn(`[WARN] 跳过不支持市场的 Longbridge 订单: ${order.orderId} (${order.symbol})`);
+        continue;
+      }
+      mappedOrders.push(mapLongbridgeOrderWithInstrument(order, instrument));
+    }
+    return mappedOrders;
   }
 
   async getOrder(orderId: string): Promise<BrokerOrder> {
@@ -462,9 +485,16 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
 }
 
 export function mapLongbridgeOrder(order: LongbridgeOrder): BrokerOrder {
+  return mapLongbridgeOrderWithInstrument(order, fromLongbridgeSymbol(order.symbol));
+}
+
+function mapLongbridgeOrderWithInstrument(
+  order: LongbridgeOrder,
+  instrument: Instrument,
+): BrokerOrder {
   return {
     id: order.orderId,
-    instrument: fromLongbridgeSymbol(order.symbol),
+    instrument,
     side: fromLongbridgeOrderSide(order.side),
     type: fromLongbridgeOrderType(order.orderType),
     status: fromLongbridgeOrderStatus(order.status, order.triggerStatus),
