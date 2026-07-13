@@ -519,12 +519,12 @@ export function fromLongbridgeOrderStatus(
   status: LongbridgeOrderStatus,
   triggerStatus?: TriggerStatus | null,
 ): OrderStatus {
-  if (triggerStatus === TriggerStatus.Active) return "pending";
   if (status === LongbridgeOrderStatus.Filled) return "filled";
   if (status === LongbridgeOrderStatus.PartialFilled) return "partially-filled";
   if (status === LongbridgeOrderStatus.Canceled) return "canceled";
   if (status === LongbridgeOrderStatus.Rejected) return "rejected";
   if (status === LongbridgeOrderStatus.Expired) return "expired";
+  if (triggerStatus === TriggerStatus.Active) return "pending";
   if (PENDING_STATUSES.includes(status)) return "pending";
   return "unknown";
 }

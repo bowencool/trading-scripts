@@ -14,16 +14,29 @@ import {
   mapLongbridgeOrder,
 } from "./broker.js";
 
-test("fromLongbridgeOrderStatus normalizes active conditional and terminal states", () => {
+for (const [status, expected] of [
+  [OrderStatus.Filled, "filled"],
+  [OrderStatus.Canceled, "canceled"],
+  [OrderStatus.Rejected, "rejected"],
+  [OrderStatus.Expired, "expired"],
+] as const) {
+  test(`fromLongbridgeOrderStatus preserves ${expected} when the trigger is active`, () => {
+    assert.equal(fromLongbridgeOrderStatus(status, TriggerStatus.Active), expected);
+  });
+}
+
+test("fromLongbridgeOrderStatus preserves a partial fill when the trigger is active", () => {
+  assert.equal(
+    fromLongbridgeOrderStatus(OrderStatus.PartialFilled, TriggerStatus.Active),
+    "partially-filled",
+  );
+});
+
+test("fromLongbridgeOrderStatus maps an active non-terminal conditional order to pending", () => {
   assert.equal(
     fromLongbridgeOrderStatus(OrderStatus.VarietiesNotReported, TriggerStatus.Active),
     "pending",
   );
-  assert.equal(fromLongbridgeOrderStatus(OrderStatus.PartialFilled), "partially-filled");
-  assert.equal(fromLongbridgeOrderStatus(OrderStatus.Filled), "filled");
-  assert.equal(fromLongbridgeOrderStatus(OrderStatus.Canceled), "canceled");
-  assert.equal(fromLongbridgeOrderStatus(OrderStatus.Rejected), "rejected");
-  assert.equal(fromLongbridgeOrderStatus(OrderStatus.Expired), "expired");
 });
 
 test("mapLongbridgeOrder removes broker symbol suffix and Decimal values", () => {
