@@ -1,15 +1,15 @@
 # trading-scripts
 
-基于 [Longbridge OpenAPI](https://open.longbridge.com) 的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。
+行情源与交易券商相互独立的自动交易脚本，读取 [daily_stock_analysis](https://github.com/ZhuLinsen/daily_stock_analysis) 生成的分析报告并自动执行买卖下单。当前行情 Provider 与 Broker Adapter 均由 [Longbridge OpenAPI](https://open.longbridge.com) 实现。
 
 
 
 ## 功能
 
 - 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
-- **实时持仓对比**：从 Longbridge API 获取持仓和活跃订单，与信号做对比，无需本地状态文件
+- **实时持仓对比**：通过 Broker Adapter 获取持仓和活跃订单，与信号做对比，无需本地状态文件
 - 自动过滤 A 股，仅处理港股和美股标的
-- **智能取价**：优先使用盘口深度（卖一/买一），其次盘前/盘后/夜盘价格，最后 `lastDone`
+- **智能取价**：通过 MarketDataProvider 获取盘口和分时段报价，优先使用卖一/买一，其次盘前/盘后/夜盘价格，最后使用最新价
 - 买入信号：以阈值最高价（目标价 × (1 + 阈值%)）提交限价单 (LO)，10 秒超时未成交则跳过
 - 买入数量：先按 `BUY_PCT` 限制可用购买力，再按 `RISK_PCT_PER_TRADE` 和止损价限制单笔最大风险
 - 组合约束：支持 `MAX_POSITION_PCT` 单标的上限和 `MAX_HOLDINGS` 最大持仓标的数
@@ -18,18 +18,24 @@
 - SL/TP 自动同步：持仓数量或信号价格变化时自动调整挂单
 - SL/TP 自动补挂：持仓但无止损止盈时，从 24h 内信号（或最近记录）中恢复
 - 严格保护单检查：开启 `STRICT_SLTP_CHECK=true` 后，跨日持仓缺少可见 SL/TP 也会进入补挂检查
-- 孤儿订单清理：基于 `todayOrders()` API 自动撤销无父订单的 SL/TP + OCO 互斥清理
+- 孤儿订单清理：自动撤销无父订单的 SL/TP，并在下次脚本启动时清理已成交保护单的另一单
 - 支持人工确认和全自动 (`--auto-approve`) 两种模式
+
+> Longbridge 当前使用 `reconciled-orders` 保护模式：SL/TP 是两张独立订单，不是券商服务端的实时 OCO。其中一张成交后，另一张要等下一次脚本启动时才会被清理；两次运行之间存在两张订单先后成交的风险。
 
 ## 交易流程
 
 ```mermaid
 flowchart TD
+  Config["Config<br/>CLI / env"] --> Factory["ProviderFactory"]
+  Factory --> Market["MarketDataProvider<br/>盘口 / 分时段报价 / 最新价"]
+  Factory --> Broker["BrokerAdapter<br/>账户 / 持仓 / 订单"]
   DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓<br/>看多 / 强烈看多 / 看空 / 强烈看空"]
-  API["Longbridge API<br/>stockPositions() / todayOrders() / historyOrders()"] --> Snapshot["cleanup snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
+  Market --> Execute
+  Broker --> Snapshot["provider-neutral snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
 
   Signals --> SlTpRecord["querySlTpRecord()<br/>持仓保护单价格"]
-  Snapshot --> Cleanup["cleanup orphan / OCO orders<br/>collect completed record ids"]
+  Snapshot --> Cleanup["reconcile protection orders<br/>collect completed record ids"]
   Snapshot --> Portfolio["buildPortfolioState()<br/>STRICT_SLTP_CHECK 可将跨日裸仓纳入恢复检查"]
   SlTpRecord --> Preflight["buildPreflightPlan()<br/>取消冲突挂单 / 合并重复 SL/TP / 同步或补挂 SL/TP"]
   Cleanup --> Preflight
@@ -59,7 +65,9 @@ flowchart TD
 
 ## 快速开始
 
-### 1. 注册 OAuth Client
+### 1. 配置当前 Longbridge 实现
+
+在 Longbridge 注册 OAuth Client：
 
 ```bash
 curl -X POST https://openapi.longbridge.com/oauth2/register \
@@ -71,7 +79,7 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
   }'
 ```
 
-保存返回的 `client_id`。
+保存返回的 `client_id`，并在 `.env` 中配置为 `LONGBRIDGE_CLIENT_ID`。
 
 ### 2. 配置环境变量
 
@@ -80,12 +88,20 @@ curl -X POST https://openapi.longbridge.com/oauth2/register \
 ### 3. 交易
 
 ``` bash
-pnpm trade # 人工确认模式
+pnpm trade # 人工确认模式，使用 .env 中的 Provider
 pnpm trade --auto-approve # 全自动模式
 pnpm trade --dry-run # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 ```
 
-首次运行 `pnpm trade` 时，会打开浏览器完成 Longbridge OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
+`MARKET_DATA_PROVIDER` 与 `BROKER_PROVIDER` 分别选择行情 Provider 和交易券商 Adapter，两者相互独立且都必须通过环境变量或 CLI 提供。CLI 优先级更高，可逐项覆盖环境变量：
+
+```bash
+pnpm trade --market-data longbridge --broker longbridge
+```
+
+当前两项可用值均只有 `longbridge`，行情和交易配置相互独立。
+
+首次使用当前 Longbridge Provider 运行时，会打开浏览器完成 OAuth 授权（**提示**：可以使用模拟账户完成授权和测试，无需真实资金）。Token 缓存在 `~/.longbridge/openapi/tokens/<client_id>`。
 
 ## Docker
 
@@ -95,21 +111,27 @@ docker pull ghcr.io/bowencool/trading-scripts:latest
 
 # 自动交易（人工确认模式）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade
 
 # 自动交易（全自动模式）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --auto-approve
 
 # 试运行（连接交易所，展示“启动前预检查 + 交易行动计划”，不实际下单）
 docker run --rm \
-  -e CLIENT_ID=your-client-id \
+  -e LONGBRIDGE_CLIENT_ID=your-client-id \
+  -e MARKET_DATA_PROVIDER=longbridge \
+  -e BROKER_PROVIDER=longbridge \
   -v /path/to/stock_analysis.db:/app/db/stock_analysis.db:ro \
   -v ~/.longbridge:/root/.longbridge \
   ghcr.io/bowencool/trading-scripts trade --dry-run
@@ -124,6 +146,8 @@ docker run --rm \
 | `/root/.longbridge` | OAuth token 缓存（首次授权后可复用）                                                                             |
 
 > **提示**：Docker 镜像内已固定 `DB_PATH=/app/db/stock_analysis.db`，不需要额外传 `DB_PATH` 环境变量；如需更换数据库文件，请调整宿主机挂载源路径，容器目标路径保持不变。
+
+> 镜像默认将两个 Provider 设为 `longbridge`。可以通过 `-e` 修改环境变量，也可以在 `trade` 后传 `--market-data` / `--broker` 逐项覆盖。
 
 > **注意**：镜像体积较大（~700MB），主要由 [Longbridge SDK](https://github.com/longportapp/openapi-sdk) 的平台原生绑定（arm64/x64）、Node.js 运行时及 tsx（TypeScript 执行环境）共同构成。
 

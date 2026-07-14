@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OrderStatus } from "longbridge";
 import {
   buildCleanupActions,
   collectCleanupActions,
@@ -9,130 +8,59 @@ import {
   formatCleanupAction,
   selectOcoOrdersToCancel,
 } from "./cleanup.js";
+import type { BrokerOrder, OrderRole, OrderStatus } from "./providers/types.js";
+
+function order(
+  id: string,
+  status: OrderStatus,
+  role: OrderRole,
+  remark: string,
+  symbol = "NVDA",
+): BrokerOrder {
+  return {
+    id,
+    instrument: { symbol, market: "US" },
+    side: role === "buy" ? "buy" : "sell",
+    type: "limit",
+    status,
+    quantity: 1,
+    executedQuantity: status === "filled" ? 1 : 0,
+    timeInForce: "good-til-canceled",
+    outsideRegularHours: true,
+    remark,
+    role,
+  };
+}
 
 test("selectOcoOrdersToCancel only cancels the opposite order from the same record id", () => {
   const orders = [
-    {
-      orderId: "sl-old-filled",
-      status: OrderStatus.Filled,
-      remark: "auto-trade:sl:101",
-    },
-    {
-      orderId: "tp-old-active",
-      status: OrderStatus.New,
-      remark: "auto-trade:tp:101",
-    },
-    {
-      orderId: "sl-new-active",
-      status: OrderStatus.New,
-      remark: "auto-trade:sl:202",
-    },
-    {
-      orderId: "tp-new-active",
-      status: OrderStatus.New,
-      remark: "auto-trade:tp:202",
-    },
+    order("sl-old-filled", "filled", "stop_loss", "auto-trade:sl:101"),
+    order("tp-old-active", "pending", "take_profit", "auto-trade:tp:101"),
+    order("sl-new-active", "pending", "stop_loss", "auto-trade:sl:202"),
+    order("tp-new-active", "pending", "take_profit", "auto-trade:tp:202"),
   ];
-
-  const result = selectOcoOrdersToCancel(orders);
   assert.deepEqual(
-    result.map((order) => order.orderId),
+    selectOcoOrdersToCancel(orders).map((item) => item.id),
     ["tp-old-active"],
   );
 });
 
 test("selectOcoOrdersToCancel ignores unmatched or malformed remarks", () => {
   const orders = [
-    {
-      orderId: "sl-filled",
-      status: OrderStatus.Filled,
-      remark: "auto-trade:sl:333",
-    },
-    {
-      orderId: "tp-missing-id",
-      status: OrderStatus.New,
-      remark: "auto-trade:tp:not-a-number",
-    },
-    {
-      orderId: "tp-other-id",
-      status: OrderStatus.New,
-      remark: "auto-trade:tp:444",
-    },
+    order("sl-filled", "filled", "stop_loss", "auto-trade:sl:333"),
+    order("tp-missing-id", "pending", "take_profit", "auto-trade:tp:not-a-number"),
+    order("tp-other-id", "pending", "take_profit", "auto-trade:tp:444"),
   ];
-
-  const result = selectOcoOrdersToCancel(orders);
-  assert.deepEqual(result, []);
-});
-
-test("selectOcoOrdersToCancel cancels stop loss when take profit is already filled", () => {
-  const orders = [
-    {
-      orderId: "tp-filled",
-      status: OrderStatus.Filled,
-      remark: "auto-trade:tp:555",
-    },
-    {
-      orderId: "sl-active",
-      status: OrderStatus.VarietiesNotReported,
-      remark: "auto-trade:sl:555",
-    },
-  ];
-
-  const result = selectOcoOrdersToCancel(orders);
-  assert.deepEqual(
-    result.map((order) => order.orderId),
-    ["sl-active"],
-  );
-});
-
-test("selectOcoOrdersToCancel only returns one cancel target per order id", () => {
-  const orders = [
-    {
-      orderId: "sl-filled",
-      status: OrderStatus.Filled,
-      remark: "auto-trade:sl:777",
-    },
-    {
-      orderId: "tp-active",
-      status: OrderStatus.New,
-      remark: "auto-trade:tp:777",
-    },
-    {
-      orderId: "tp-active",
-      status: OrderStatus.VarietiesNotReported,
-      remark: "auto-trade:tp:777",
-    },
-  ];
-
-  const result = selectOcoOrdersToCancel(orders);
-  assert.deepEqual(
-    result.map((order) => order.orderId),
-    ["tp-active"],
-  );
+  assert.deepEqual(selectOcoOrdersToCancel(orders), []);
 });
 
 test("buildCleanupActions marks active SL/TP without holding as orphan cleanup", () => {
   const result = buildCleanupActions(new Set<string>(), [
-    {
-      orderId: "sl-active",
-      symbol: "KO.US",
-      status: OrderStatus.New,
-      remark: "auto-trade:sl:301",
-    },
-    {
-      orderId: "tp-active",
-      symbol: "KO.US",
-      status: OrderStatus.VarietiesNotReported,
-      remark: "auto-trade:tp:301",
-    },
+    order("sl-active", "pending", "stop_loss", "auto-trade:sl:301", "KO"),
+    order("tp-active", "pending", "take_profit", "auto-trade:tp:301", "KO"),
   ]);
-
   assert.deepEqual(
-    result.map((action) => ({
-      kind: action.kind,
-      orderId: action.orderId,
-      role: action.role,
-    })),
+    result.map(({ kind, orderId, role }) => ({ kind, orderId, role })),
     [
       { kind: "orphan", orderId: "sl-active", role: "stop_loss" },
       { kind: "orphan", orderId: "tp-active", role: "take_profit" },
@@ -140,184 +68,111 @@ test("buildCleanupActions marks active SL/TP without holding as orphan cleanup",
   );
 });
 
-test("buildCleanupActions avoids duplicate cancellation when orphan and OCO rules overlap", () => {
+test("buildCleanupActions avoids duplicate cancellation when orphan and OCO overlap", () => {
   const result = buildCleanupActions(new Set<string>(), [
-    {
-      orderId: "sl-active",
-      symbol: "NVDA.US",
-      status: OrderStatus.VarietiesNotReported,
-      remark: "auto-trade:sl:888",
-    },
-    {
-      orderId: "tp-filled",
-      symbol: "NVDA.US",
-      status: OrderStatus.Filled,
-      remark: "auto-trade:tp:888",
-    },
+    order("sl-active", "pending", "stop_loss", "auto-trade:sl:888"),
+    order("tp-filled", "filled", "take_profit", "auto-trade:tp:888"),
   ]);
-
   assert.deepEqual(result, [
     {
       kind: "orphan",
       orderId: "sl-active",
-      symbol: "NVDA.US",
+      symbol: "NVDA",
       role: "stop_loss",
       recordId: "888",
     },
   ]);
 });
 
-test("collectCleanupActions uses filled history to identify orphaned OCO orders", async () => {
-  const historyCalls: Array<{ status: OrderStatus[] }> = [];
-
-  const tradeCtx = {
-    async stockPositions() {
-      return {
-        channels: [
-          {
-            positions: [
-              {
-                symbol: "NVDA.US",
-                quantity: { toString: () => "68" },
-              },
-            ],
-          },
-        ],
-      };
-    },
-    async todayOrders() {
+test("collectCleanupActions queries sequential snapshots including filled history", async () => {
+  const calls: string[] = [];
+  const broker = {
+    async getPositions() {
+      calls.push("positions");
       return [
         {
-          orderId: "sl-active",
-          symbol: "NVDA.US",
-          status: OrderStatus.VarietiesNotReported,
-          remark: "auto-trade:sl:888",
+          instrument: { symbol: "NVDA", market: "US" as const },
+          quantity: 68,
+          availableQuantity: 68,
+          costPrice: 100,
         },
       ];
     },
-    async historyOrders(opts: { status: OrderStatus[] }) {
-      historyCalls.push(opts);
-      if (opts.status.includes(OrderStatus.Filled)) {
-        return [
-          {
-            orderId: "tp-filled",
-            symbol: "NVDA.US",
-            status: OrderStatus.Filled,
-            remark: "auto-trade:tp:888",
-          },
-        ];
+    async listOrders(query: { scope?: string; statuses?: OrderStatus[] }) {
+      calls.push(query.statuses?.[0] ?? query.scope ?? "orders");
+      if (query.statuses?.includes("filled")) {
+        return [order("tp-filled", "filled", "take_profit", "auto-trade:tp:888")];
       }
-      return [];
+      if (query.statuses?.includes("pending")) return [];
+      return [order("sl-active", "pending", "stop_loss", "auto-trade:sl:888")];
     },
   };
-
-  const result = await collectCleanupActions(tradeCtx as never);
-
+  const result = await collectCleanupActions(broker as never);
   assert.deepEqual(result, [
     {
       kind: "oco",
       orderId: "sl-active",
-      symbol: "NVDA.US",
+      symbol: "NVDA",
       role: "stop_loss",
       recordId: "888",
     },
   ]);
-  assert.equal(historyCalls.length, 2);
-  assert.ok(historyCalls.some((call) => call.status.includes(OrderStatus.Filled)));
+  assert.deepEqual(calls, ["positions", "today", "pending", "filled"]);
 });
 
-test("collectCompletedBuySignalRecordIdsFromSnapshot only keeps filled SL/TP record ids", () => {
+test("collectCompletedBuySignalRecordIdsFromSnapshot only keeps filled SL/TP ids", () => {
   const recordIds = collectCompletedBuySignalRecordIdsFromSnapshot({
-    positionsResp: { channels: [] },
+    positions: [],
     todayOrders: [
-      {
-        orderId: "tp-today",
-        symbol: "NVDA.US",
-        status: OrderStatus.Filled,
-        remark: "auto-trade:tp:888",
-      },
-      {
-        orderId: "buy-filled",
-        symbol: "NVDA.US",
-        status: OrderStatus.Filled,
-        remark: "auto-trade:buy:777",
-      },
-      {
-        orderId: "tp-pending",
-        symbol: "NVDA.US",
-        status: OrderStatus.New,
-        remark: "auto-trade:tp:666",
-      },
+      order("tp", "filled", "take_profit", "auto-trade:tp:888"),
+      order("buy", "filled", "buy", "auto-trade:buy:777"),
+      order("pending", "pending", "take_profit", "auto-trade:tp:666"),
     ],
     historyActiveOrders: [],
     historyFilledOrders: [
-      {
-        orderId: "sl-history",
-        symbol: "AAPL.US",
-        status: OrderStatus.Filled,
-        remark: "auto-trade:sl:555",
-      },
-      {
-        orderId: "tp-malformed",
-        symbol: "AAPL.US",
-        status: OrderStatus.Filled,
-        remark: "auto-trade:tp:not-a-number",
-      },
-      {
-        orderId: "tp-duplicate",
-        symbol: "NVDA.US",
-        status: OrderStatus.Filled,
-        remark: "auto-trade:tp:888",
-      },
+      order("sl", "filled", "stop_loss", "auto-trade:sl:555", "AAPL"),
+      order("malformed", "filled", "take_profit", "auto-trade:tp:nope", "AAPL"),
     ],
-  } as never);
-
+  });
   assert.deepEqual(
     [...recordIds].sort((a, b) => a - b),
     [555, 888],
   );
 });
 
-test("executeCleanupActions cancels only the supplied actions", async () => {
+test("executeCleanupActions cancels only supplied actions", async () => {
   const canceled: string[] = [];
-
-  const tradeCtx = {
-    async cancelOrder(orderId: string) {
-      canceled.push(orderId);
-    },
-  };
-
-  await executeCleanupActions(tradeCtx as never, [
+  await executeCleanupActions({ cancelOrder: async (id: string) => void canceled.push(id) }, [
     {
       kind: "orphan",
       orderId: "sl-active",
-      symbol: "KO.US",
+      symbol: "KO",
       role: "stop_loss",
       recordId: "301",
     },
     {
       kind: "oco",
       orderId: "tp-active",
-      symbol: "NVDA.US",
+      symbol: "NVDA",
       role: "take_profit",
       recordId: "888",
     },
   ]);
-
   assert.deepEqual(canceled, ["sl-active", "tp-active"]);
 });
 
-test("formatCleanupAction renders dry-run preview text", () => {
-  const text = formatCleanupAction(
-    {
-      kind: "oco",
-      orderId: "sl-active",
-      symbol: "NVDA.US",
-      role: "stop_loss",
-      recordId: "888",
-    },
-    "dry-run",
+test("formatCleanupAction renders dry-run preview", () => {
+  assert.equal(
+    formatCleanupAction(
+      {
+        kind: "oco",
+        orderId: "sl-active",
+        symbol: "NVDA",
+        role: "stop_loss",
+        recordId: "888",
+      },
+      "dry-run",
+    ),
+    "[DRY RUN][OCO] 止盈已成交，将取消止损 sl-active (NVDA, record 888)",
   );
-
-  assert.equal(text, "[DRY RUN][OCO] 止盈已成交，将取消止损 sl-active (NVDA.US, record 888)");
 });

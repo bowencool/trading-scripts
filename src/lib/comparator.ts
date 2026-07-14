@@ -1,5 +1,6 @@
 import { computeBuyLimitPrice } from "./pricing.js";
-import { toLongbridgeSymbol } from "./symbols.js";
+import type { Instrument } from "./providers/types.js";
+import { toInstrument } from "./symbols.js";
 import type { ActionPlan, ActiveOrder, AnalysisRecord, PortfolioState } from "./types.js";
 
 /**
@@ -44,11 +45,12 @@ export function buildActionPlan(
   // ── Buy signals ─────────────────────────────────────────────────────────────
 
   for (const record of buySignals) {
-    const symbol = toLongbridgeSymbol(record.code);
-    if (!symbol) {
-      console.log(`[SKIP] ${record.code} 无法映射到 Longbridge symbol`);
+    const instrument = toInstrument(record.code);
+    if (!instrument) {
+      console.log(`[SKIP] ${record.code} 无法映射到交易标的`);
       continue;
     }
+    const symbol = instrument.symbol;
     if (processedSymbols.has(symbol)) {
       continue;
     }
@@ -77,6 +79,7 @@ export function buildActionPlan(
         );
         plans.push({
           action: "ADD_POSITION",
+          instrument,
           symbol,
           record,
           holding,
@@ -97,6 +100,7 @@ export function buildActionPlan(
       if (Math.abs(pendingPrice - threshold) / threshold > 0.001) {
         plans.push({
           action: "UPDATE_BUY",
+          instrument,
           symbol,
           record,
           pendingBuyOrder: pendingBuy,
@@ -114,7 +118,7 @@ export function buildActionPlan(
       continue;
     }
 
-    plans.push({ action: "NEW_BUY", symbol, record });
+    plans.push({ action: "NEW_BUY", instrument, symbol, record });
     plannedNewPositions++;
     processedSymbols.add(symbol);
   }
@@ -122,11 +126,12 @@ export function buildActionPlan(
   // ── Sell signals ────────────────────────────────────────────────────────────
 
   for (const record of sellSignals) {
-    const symbol = toLongbridgeSymbol(record.code);
-    if (!symbol) {
-      console.log(`[SKIP] ${record.code} 无法映射到 Longbridge symbol`);
+    const instrument = toInstrument(record.code);
+    if (!instrument) {
+      console.log(`[SKIP] ${record.code} 无法映射到交易标的`);
       continue;
     }
+    const symbol = instrument.symbol;
     if (processedSymbols.has(symbol)) {
       continue;
     }
@@ -148,6 +153,7 @@ export function buildActionPlan(
     const ordersToCancel = [...slOrders, ...tpOrders];
     plans.push({
       action: isPartial ? "SELL_PARTIAL" : "SELL_FULL",
+      instrument,
       symbol,
       record,
       holding,
@@ -183,7 +189,7 @@ export function buildPreflightPlan(
   );
   const sellSymbols = new Set(
     sellSignals
-      .map((record) => toLongbridgeSymbol(record.code))
+      .map((record) => toInstrument(record.code)?.symbol)
       .filter((symbol): symbol is string => Boolean(symbol)),
   );
 
@@ -299,7 +305,13 @@ function buildHeldSlTpPlans(
     const slTpRecord = slTpRecords.get(symbol);
 
     if (!slTpRecord) {
-      plans.push({ action: "HOLD", symbol, record: makeDummyRecord(symbol), holding });
+      plans.push({
+        action: "HOLD",
+        instrument: holding.instrument,
+        symbol,
+        record: makeDummyRecord(symbol),
+        holding,
+      });
       continue;
     }
 
@@ -313,6 +325,7 @@ function buildHeldSlTpPlans(
       );
       plans.push({
         action: "MERGE_SL_TP",
+        instrument: holding.instrument,
         symbol,
         record: slTpRecord,
         holding,
@@ -328,12 +341,19 @@ function buildHeldSlTpPlans(
       if (portfolio.orphanWarnings.includes(symbol) && (hasSl || hasTp)) {
         plans.push({
           action: "RECOVER_SL_TP",
+          instrument: holding.instrument,
           symbol,
           record: slTpRecord,
           holding,
         });
       } else {
-        plans.push({ action: "HOLD", symbol, record: slTpRecord, holding });
+        plans.push({
+          action: "HOLD",
+          instrument: holding.instrument,
+          symbol,
+          record: slTpRecord,
+          holding,
+        });
       }
       continue;
     }
@@ -362,6 +382,7 @@ function buildHeldSlTpPlans(
     ) {
       plans.push({
         action: "HOLD",
+        instrument: holding.instrument,
         symbol,
         record: slTpRecord,
         holding,
@@ -377,6 +398,7 @@ function buildHeldSlTpPlans(
     ) {
       plans.push({
         action: "SYNC_SL_TP",
+        instrument: holding.instrument,
         symbol,
         record: slTpRecord,
         holding,
@@ -392,6 +414,7 @@ function buildHeldSlTpPlans(
     ) {
       plans.push({
         action: "RECOVER_SL_TP",
+        instrument: holding.instrument,
         symbol,
         record: slTpRecord,
         holding,
@@ -403,6 +426,7 @@ function buildHeldSlTpPlans(
 
     plans.push({
       action: "HOLD",
+      instrument: holding.instrument,
       symbol,
       record: slTpRecord,
       holding,
@@ -423,39 +447,46 @@ function buildConflictingPendingOrderPlans(
   plans: ActionPlan[];
   conflictSymbols: Set<string>;
 } {
-  const buySignalsBySymbol = new Map<string, AnalysisRecord>();
-  const sellSignalsBySymbol = new Map<string, AnalysisRecord>();
+  const buySignalsBySymbol = new Map<string, { instrument: Instrument; record: AnalysisRecord }>();
+  const sellSignalsBySymbol = new Map<string, { instrument: Instrument; record: AnalysisRecord }>();
 
   for (const record of buySignals) {
     if (completedBuySignalRecordIds.has(record.id)) {
       continue;
     }
-    const symbol = toLongbridgeSymbol(record.code);
-    if (symbol) {
-      buySignalsBySymbol.set(symbol, record);
+    const instrument = toInstrument(record.code);
+    if (instrument) {
+      buySignalsBySymbol.set(instrument.symbol, { instrument, record });
     }
   }
 
   for (const record of sellSignals) {
-    const symbol = toLongbridgeSymbol(record.code);
-    if (symbol) {
-      sellSignalsBySymbol.set(symbol, record);
+    const instrument = toInstrument(record.code);
+    if (instrument) {
+      sellSignalsBySymbol.set(instrument.symbol, { instrument, record });
     }
   }
 
-  const grouped = new Map<string, { record: AnalysisRecord; orders: ActiveOrder[] }>();
+  const grouped = new Map<
+    string,
+    {
+      instrument: Instrument;
+      record: AnalysisRecord;
+      orders: ActiveOrder[];
+    }
+  >();
 
   for (const order of portfolio.activeOrders) {
-    let record: AnalysisRecord | undefined;
+    let signal: { instrument: Instrument; record: AnalysisRecord } | undefined;
     if (order.role === "buy") {
-      record = sellSignalsBySymbol.get(order.symbol);
+      signal = sellSignalsBySymbol.get(order.symbol);
     } else if (order.role === "sell") {
-      record = buySignalsBySymbol.get(order.symbol);
+      signal = buySignalsBySymbol.get(order.symbol);
     } else {
       continue;
     }
 
-    if (!record) {
+    if (!signal) {
       continue;
     }
 
@@ -465,18 +496,19 @@ function buildConflictingPendingOrderPlans(
       continue;
     }
 
-    grouped.set(order.symbol, { record, orders: [order] });
+    grouped.set(order.symbol, { ...signal, orders: [order] });
   }
 
   const plans: ActionPlan[] = [];
   const conflictSymbols = new Set<string>();
 
-  for (const [symbol, { record, orders }] of grouped) {
+  for (const [symbol, { instrument, record, orders }] of grouped) {
     console.log(
       `[CANCEL] ${symbol} 最新信号为 ${record.operation_advice ?? "-"}，取消冲突挂单 ${orders.map((order) => order.orderId).join(", ")}`,
     );
     plans.push({
       action: "CANCEL_CONFLICTING_ORDERS",
+      instrument,
       symbol,
       record,
       ordersToCancel: orders,

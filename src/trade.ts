@@ -1,5 +1,3 @@
-import { QuoteContext, TradeContext } from "longbridge";
-import { buildConfig } from "./lib/auth.js";
 import {
   buildCleanupActionsFromSnapshot,
   type CleanupAction,
@@ -8,6 +6,7 @@ import {
   fetchCleanupSnapshot,
   formatCleanupAction,
 } from "./lib/cleanup.js";
+import { parseTradeCliArgs } from "./lib/cli.js";
 import { colors } from "./lib/color.js";
 import {
   buildActionPlan,
@@ -17,8 +16,9 @@ import {
 import { promptConfirm } from "./lib/confirm.js";
 import { queryAll, queryRecordById, querySlTpRecord, WINDOW_HOURS } from "./lib/db.js";
 import { executeAction, FatalError } from "./lib/executor.js";
-import { OrderWatcher } from "./lib/order-watcher.js";
 import { buildPortfolioStateFromSnapshot, fetchPortfolioState } from "./lib/portfolio.js";
+import { createProviders } from "./lib/providers/factory.js";
+import type { Instrument } from "./lib/providers/types.js";
 import type { ActionKind, ActionPlan, AnalysisRecord } from "./lib/types.js";
 
 // ── 显示 ───────────────────────────────────────────────────────────────────────
@@ -137,21 +137,29 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
 
 // ── 主程序 ──────────────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const isAutoApprove = args.includes("--auto-approve");
-  const isDryRun = args.includes("--dry-run");
+async function main(): Promise<number> {
+  const cli = parseTradeCliArgs(process.argv.slice(2), process.env);
+  if (cli.kind === "help") {
+    console.log(cli.usage);
+    return 0;
+  }
+  if (cli.kind === "error") {
+    console.error(`错误: ${cli.message}\n\n${cli.usage}`);
+    return 1;
+  }
+
+  const { autoApprove: isAutoApprove, dryRun: isDryRun } = cli.options;
 
   const dbPath = process.env.DB_PATH;
   if (!dbPath) {
     console.error("错误: 请在 .env 中设置 DB_PATH（stock_analysis.db 文件路径）");
-    process.exit(1);
+    return 1;
   }
 
-  const clientId = process.env.CLIENT_ID;
+  const clientId = process.env.LONGBRIDGE_CLIENT_ID;
   if (!clientId) {
-    console.error("错误: 请在 .env 中设置 CLIENT_ID（Longbridge OAuth client ID）");
-    process.exit(1);
+    console.error("错误: 请在 .env 中设置 LONGBRIDGE_CLIENT_ID（Longbridge OAuth client ID）");
+    return 1;
   }
 
   const priceThresholdPct = Number(process.env.PRICE_THRESHOLD_PCT || "2");
@@ -165,46 +173,51 @@ async function main(): Promise<void> {
     console.error(
       `错误: PRICE_THRESHOLD_PCT 必须是 0-100 的数字，当前值: ${process.env.PRICE_THRESHOLD_PCT}`,
     );
-    process.exit(1);
+    return 1;
   }
   if (!Number.isFinite(buyPct) || buyPct <= 0 || buyPct > 100) {
     console.error(`错误: BUY_PCT 必须是 0-100 的正数，当前值: ${process.env.BUY_PCT}`);
-    process.exit(1);
+    return 1;
   }
   if (!Number.isFinite(sellPct) || sellPct <= 0 || sellPct > 100) {
     console.error(`错误: SELL_PCT 必须是 0-100 的正数，当前值: ${process.env.SELL_PCT}`);
-    process.exit(1);
+    return 1;
   }
   if (!Number.isFinite(riskPctPerTrade) || riskPctPerTrade < 0 || riskPctPerTrade > 100) {
     console.error(
       `错误: RISK_PCT_PER_TRADE 必须是 0-100 的数字，当前值: ${process.env.RISK_PCT_PER_TRADE}`,
     );
-    process.exit(1);
+    return 1;
   }
   if (!Number.isFinite(maxPositionPct) || maxPositionPct < 0 || maxPositionPct > 100) {
     console.error(
       `错误: MAX_POSITION_PCT 必须是 0-100 的数字，当前值: ${process.env.MAX_POSITION_PCT}`,
     );
-    process.exit(1);
+    return 1;
   }
   if (!Number.isFinite(maxHoldings) || maxHoldings < 0 || !Number.isInteger(maxHoldings)) {
     console.error(`错误: MAX_HOLDINGS 必须是非负整数，当前值: ${process.env.MAX_HOLDINGS}`);
-    process.exit(1);
+    return 1;
   }
 
   if (isDryRun) {
     console.log(`🔍 [DRY RUN] 模拟运行，仅展示行动计划，不会实际下单\n`);
   }
 
-  // 连接 Longbridge (试运行也需要只读 API 来获取投资组合状态)
-  console.log("🔐 正在连接 Longbridge...");
-  const config = await buildConfig(clientId);
-  const quoteCtx = QuoteContext.new(config);
-  const tradeCtx = TradeContext.new(config);
+  // 试运行也需要只读 provider 来获取投资组合状态。
+  console.log(`🔐 正在连接行情 ${cli.options.marketData} / 交易 ${cli.options.broker}...`);
+  const { marketData, broker } = await createProviders(cli.options, {
+    longbridgeOAuthClientId: clientId,
+  });
+  console.log(
+    broker.protectionMode === "reconciled-orders"
+      ? "ℹ️  保护单模式: reconciled-orders（独立 SL/TP，下次启动时清理成交后的另一单）"
+      : `ℹ️  保护单模式: ${broker.protectionMode}`,
+  );
 
   // 1. 预览或执行孤儿订单清理
   console.log("🧹 清理孤儿订单...");
-  const cleanupSnapshot = await fetchCleanupSnapshot(tradeCtx);
+  const cleanupSnapshot = await fetchCleanupSnapshot(broker);
   const cleanupActions = buildCleanupActionsFromSnapshot(cleanupSnapshot);
   const completedBuySignalRecordIds =
     collectCompletedBuySignalRecordIdsFromSnapshot(cleanupSnapshot);
@@ -214,7 +227,7 @@ async function main(): Promise<void> {
   } else if (cleanupActions.length === 0) {
     console.log("✅ 无孤儿订单");
   } else if (isAutoApprove) {
-    await executeCleanupActions(tradeCtx, cleanupActions);
+    await executeCleanupActions(broker, cleanupActions);
     shouldReuseCleanupSnapshot = false;
   } else {
     printStartupCleanupPreview(cleanupActions, "plan");
@@ -222,7 +235,7 @@ async function main(): Promise<void> {
       `\n确认执行启动前孤儿订单清理？(Enter 确认 / Esc 取消): `,
     );
     if (confirmed) {
-      await executeCleanupActions(tradeCtx, cleanupActions);
+      await executeCleanupActions(broker, cleanupActions);
       shouldReuseCleanupSnapshot = false;
     } else {
       console.log("[SKIP] 用户取消启动前孤儿订单清理");
@@ -234,13 +247,13 @@ async function main(): Promise<void> {
   const portfolio = shouldReuseCleanupSnapshot
     ? buildPortfolioStateFromSnapshot(
         {
-          positionsResp: cleanupSnapshot.positionsResp,
+          positions: cleanupSnapshot.positions,
           todayOrders: cleanupSnapshot.todayOrders,
-          historyOrdersResp: cleanupSnapshot.historyActiveOrders,
+          historyOrders: cleanupSnapshot.historyActiveOrders,
         },
         strictSlTpCheck,
       )
-    : await fetchPortfolioState(tradeCtx, strictSlTpCheck);
+    : await fetchPortfolioState(broker, strictSlTpCheck);
 
   console.log(`\n📊 持仓: ${portfolio.holdings.size} 只`);
   for (const [symbol, holding] of portfolio.holdings) {
@@ -252,8 +265,8 @@ async function main(): Promise<void> {
 
   // 3. 查询所有持仓标的的止损/止盈分析记录
   const slTpRecords = new Map<string, AnalysisRecord>();
-  for (const symbol of portfolio.holdings.keys()) {
-    const code = symbolToCode(symbol);
+  for (const [symbol, holding] of portfolio.holdings) {
+    const code = instrumentToCode(holding.instrument);
     if (!code) continue;
     const slTpRecord = querySlTpRecord(dbPath, code);
     if (slTpRecord) {
@@ -320,108 +333,91 @@ async function main(): Promise<void> {
     );
     printActionPlan("交易行动计划", dryRunActionPlan);
     console.log("\n🔍 [DRY RUN] 预检查与交易计划展示完毕，未执行任何操作。");
-    return;
+    return 0;
   }
 
-  // 8. 为整个运行启动 WebSocket 订单推送监听器
-  const orderWatcher = new OrderWatcher(tradeCtx);
-  await orderWatcher.start();
+  // 8. 仅在实际执行期间启动 broker 的短期订单事件订阅。
+  await broker.start();
+  try {
+    const execConfig = {
+      marketData,
+      broker,
+      autoApprove: isAutoApprove,
+      buyPct,
+      sellPct,
+      riskPctPerTrade,
+      maxPositionPct,
+      priceThresholdPct,
+    };
 
-  const execConfig = {
-    quoteCtx,
-    tradeCtx,
-    orderWatcher,
-    autoApprove: isAutoApprove,
-    buyPct,
-    sellPct,
-    riskPctPerTrade,
-    maxPositionPct,
-    priceThresholdPct,
-  };
+    let finalPortfolio = portfolio;
+    const actionablePreflight = preflightPlan.filter((p) => p.action !== "HOLD");
 
-  let finalPortfolio = portfolio;
-  const actionablePreflight = preflightPlan.filter((p) => p.action !== "HOLD");
-
-  for (const plan of actionablePreflight) {
-    try {
-      await executeAction(execConfig, plan);
-    } catch (err) {
-      if (err instanceof FatalError) {
-        console.error(`[FATAL] ${err.message} — 终止后续执行`);
-        break;
+    for (const plan of actionablePreflight) {
+      try {
+        await executeAction(execConfig, plan);
+      } catch (err) {
+        if (err instanceof FatalError) {
+          console.error(`[FATAL] ${err.message} — 终止后续执行`);
+          break;
+        }
+        console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
+        // 非致命错误: 继续处理下一个计划
       }
-      console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
-      // 非致命错误: 继续处理下一个计划
     }
-  }
 
-  if (actionablePreflight.length > 0) {
-    console.log("\n🔄 预检查执行完成，刷新持仓和活跃订单...");
-    finalPortfolio = await fetchPortfolioState(tradeCtx, strictSlTpCheck);
-    console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
-  }
+    if (actionablePreflight.length > 0) {
+      console.log("\n🔄 预检查执行完成，刷新持仓和活跃订单...");
+      finalPortfolio = await fetchPortfolioState(broker, strictSlTpCheck);
+      console.log(`📊 刷新后活跃订单: ${finalPortfolio.activeOrders.length} 个`);
+    }
 
-  // 9. 从启动后投资组合构建并展示最终交易计划
-  const actionPlan = buildActionPlan(
-    finalPortfolio,
-    buySignals,
-    sellSignals,
-    slTpRecords,
-    priceThresholdPct,
-    completedBuySignalRecordIds,
-    maxHoldings,
-  );
-  printActionPlan("交易行动计划", actionPlan);
+    // 9. 从启动后投资组合构建并展示最终交易计划
+    const actionPlan = buildActionPlan(
+      finalPortfolio,
+      buySignals,
+      sellSignals,
+      slTpRecords,
+      priceThresholdPct,
+      completedBuySignalRecordIds,
+      maxHoldings,
+    );
+    printActionPlan("交易行动计划", actionPlan);
 
-  const actionable = actionPlan.filter((p) => p.action !== "HOLD");
+    const actionable = actionPlan.filter((p) => p.action !== "HOLD");
 
-  if (actionable.length === 0) {
-    await orderWatcher.stop();
-    console.log("没有需要执行的操作。");
-    return;
-  }
+    if (actionable.length === 0) {
+      console.log("没有需要执行的操作。");
+      return 0;
+    }
 
-  // 10. 逐个执行每个交易操作
-  for (const plan of actionable) {
-    try {
-      await executeAction(execConfig, plan);
-    } catch (err) {
-      if (err instanceof FatalError) {
-        console.error(`[FATAL] ${err.message} — 终止后续执行`);
-        break;
+    // 10. 逐个执行每个交易操作
+    for (const plan of actionable) {
+      try {
+        await executeAction(execConfig, plan);
+      } catch (err) {
+        if (err instanceof FatalError) {
+          console.error(`[FATAL] ${err.message} — 终止后续执行`);
+          break;
+        }
+        console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
       }
-      console.error(`[ERR] ${plan.symbol} ${plan.action} 失败: ${err}`);
     }
-  }
 
-  // 11. 清理
-  await orderWatcher.stop();
-  console.log("\n✅ 完成");
+    console.log("\n✅ 完成");
+    return 0;
+  } finally {
+    await broker.stop();
+  }
 }
 
-/**
- * Reverse map a Longbridge symbol back to a DB code for SL/TP lookup.
- * "01810.HK" → "HK01810", "AAPL.US" → "AAPL"
- */
-function symbolToCode(symbol: string): string | null {
-  if (symbol.endsWith(".HK")) {
-    const num = symbol.replace(".HK", "");
-    return `HK${num}`;
-  }
-  if (symbol.endsWith(".US")) {
-    return symbol.replace(".US", "");
-  }
-  if (symbol.endsWith(".SH")) {
-    return symbol.replace(".SH", "");
-  }
-  if (symbol.endsWith(".SZ")) {
-    return symbol.replace(".SZ", "");
-  }
-  return null;
+/** Reverse-map a provider-neutral instrument to the database code convention. */
+function instrumentToCode(instrument: Instrument): string {
+  return instrument.market === "HK" ? `HK${instrument.symbol}` : instrument.symbol;
 }
 
 main()
-  .then(() => process.exit(0))
+  .then((exitCode) => process.exit(exitCode))
   .catch((err) => {
     console.error("未捕获错误:", err);
     process.exit(1);
