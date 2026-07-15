@@ -68,6 +68,72 @@ test("mapLongbridgeOrder removes broker symbol suffix and Decimal values", () =>
   assert.equal(mapped.outsideRegularHours, true);
 });
 
+test("mapLongbridgeOrder recognizes historical overnight orders as outside regular hours", () => {
+  const mapped = mapLongbridgeOrder({
+    orderId: "overnight-1",
+    symbol: "AAPL.US",
+    side: OrderSide.Buy,
+    orderType: OrderType.LO,
+    status: OrderStatus.New,
+    quantity: { toString: () => "1" },
+    executedQuantity: { toString: () => "0" },
+    price: { toString: () => "200" },
+    triggerPrice: null,
+    timeInForce: TimeInForceType.Day,
+    outsideRth: OutsideRTH.Overnight,
+    remark: "auto-trade:buy:42",
+    submittedAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: null,
+    triggerStatus: null,
+  } as never);
+
+  assert.equal(mapped.outsideRegularHours, true);
+});
+
+test("submitOrder maps provider-neutral execution sessions to Longbridge outsideRth", async () => {
+  const submitted: Array<{ outsideRth?: OutsideRTH }> = [];
+  const adapter = Object.create(LongbridgeBrokerAdapter.prototype) as LongbridgeBrokerAdapter;
+  Object.assign(adapter, {
+    tradeContext: {
+      submitOrder: async (options: { outsideRth?: OutsideRTH }) => {
+        submitted.push(options);
+        return { orderId: `order-${submitted.length}` };
+      },
+    },
+  });
+
+  for (const executionSession of ["regular", "pre", "post", "any"] as const) {
+    await adapter.submitOrder({
+      instrument: { symbol: "AAPL", market: "US" },
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 200,
+      timeInForce: "day",
+      executionSession,
+    });
+  }
+
+  assert.deepEqual(
+    submitted.map((options) => options.outsideRth),
+    [OutsideRTH.RTHOnly, OutsideRTH.AnyTime, OutsideRTH.AnyTime, OutsideRTH.AnyTime],
+  );
+
+  await assert.rejects(
+    adapter.submitOrder({
+      instrument: { symbol: "AAPL", market: "US" },
+      side: "buy",
+      type: "limit",
+      quantity: 1,
+      price: 200,
+      timeInForce: "day",
+      executionSession: "overnight" as never,
+    }),
+    /Unsupported order execution session/,
+  );
+  assert.equal(submitted.length, 4);
+});
+
 test("mapLongbridgeOrder preserves unknown order types instead of guessing", () => {
   const mapped = mapLongbridgeOrder({
     orderId: "order-2",

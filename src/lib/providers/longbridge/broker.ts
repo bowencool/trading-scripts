@@ -23,6 +23,7 @@ import {
   type Currency,
   type Instrument,
   isTerminalOrderStatus,
+  type OrderExecutionSession,
   type OrderQuery,
   type OrderRole,
   type OrderStatus,
@@ -154,7 +155,8 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
       ...(request.price == null ? {} : { price: request.price }),
       ...(request.triggerPrice == null ? {} : { triggerPrice: request.triggerPrice }),
       timeInForce: request.timeInForce,
-      outsideRegularHours: request.outsideRegularHours ?? false,
+      outsideRegularHours:
+        request.executionSession != null && request.executionSession !== "regular",
       remark: request.remark ?? "",
       role: toOrderRole(request.remark ?? ""),
     };
@@ -169,9 +171,9 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
       submittedQuantity: decimal(request.quantity),
       ...(request.price == null ? {} : { submittedPrice: decimal(request.price) }),
       ...(request.triggerPrice == null ? {} : { triggerPrice: decimal(request.triggerPrice) }),
-      ...(request.outsideRegularHours == null
+      ...(request.executionSession == null
         ? {}
-        : { outsideRth: request.outsideRegularHours ? OutsideRTH.AnyTime : OutsideRTH.RTHOnly }),
+        : { outsideRth: toLongbridgeOutsideRth(request.executionSession) }),
       ...(request.remark == null ? {} : { remark: request.remark }),
     });
     return response.orderId;
@@ -241,7 +243,7 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
           quantity: request.quantity,
           triggerPrice: request.stopLoss,
           timeInForce: "good-til-canceled",
-          outsideRegularHours: true,
+          executionSession: "any",
           remark: `auto-trade:sl:${request.recordId}`,
         },
         "止损单",
@@ -258,7 +260,7 @@ export class LongbridgeBrokerAdapter implements BrokerAdapter {
           price: request.takeProfit,
           triggerPrice: request.takeProfit,
           timeInForce: "good-til-canceled",
-          outsideRegularHours: true,
+          executionSession: "any",
           remark: `auto-trade:tp:${request.recordId}`,
         },
         "止盈单",
@@ -507,7 +509,8 @@ function mapLongbridgeOrderWithInstrument(
     ...(order.price == null ? {} : { price: Number(order.price.toString()) }),
     ...(order.triggerPrice == null ? {} : { triggerPrice: Number(order.triggerPrice.toString()) }),
     timeInForce: fromLongbridgeTimeInForce(order.timeInForce),
-    outsideRegularHours: order.outsideRth === OutsideRTH.AnyTime,
+    outsideRegularHours:
+      order.outsideRth === OutsideRTH.AnyTime || order.outsideRth === OutsideRTH.Overnight,
     remark: order.remark ?? "",
     role: toOrderRole(order.remark ?? ""),
     submittedAt: order.submittedAt,
@@ -585,6 +588,14 @@ function toLongbridgeTimeInForce(value: TimeInForce): LongbridgeTimeInForce {
   if (value === "day") return LongbridgeTimeInForce.Day;
   if (value === "good-til-canceled") return LongbridgeTimeInForce.GoodTilCanceled;
   throw new Error(`Unsupported time in force: ${value}`);
+}
+
+function toLongbridgeOutsideRth(session: OrderExecutionSession): OutsideRTH {
+  if (session === "regular") return OutsideRTH.RTHOnly;
+  if (session === "pre" || session === "post" || session === "any") {
+    return OutsideRTH.AnyTime;
+  }
+  throw new Error(`Unsupported order execution session: ${session}`);
 }
 
 function toOrderRole(remark: string): OrderRole {

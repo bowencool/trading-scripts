@@ -1,4 +1,4 @@
-import { Market, NaiveDate, type QuoteContext, TradeStatus } from "longbridge";
+import { Market, NaiveDate, type QuoteContext, TradeSession, TradeStatus } from "longbridge";
 import type { MarketDataProvider } from "../market-data.js";
 import type {
   Instrument,
@@ -6,6 +6,7 @@ import type {
   MarketQuote,
   OrderBook,
   OrderBookLevel,
+  TradingSession as ProviderTradingSession,
   SessionPrice,
   TradingStatus,
 } from "../types.js";
@@ -57,33 +58,54 @@ export class LongbridgeMarketDataProvider implements MarketDataProvider {
 
   async getTradingStatus(instrument: Instrument): Promise<TradingStatus> {
     const market = toLongbridgeMarket(instrument.market);
-    const local = getMarketLocalDateTime(this.now(), MARKET_TIME_ZONES[instrument.market]);
-    const date = new NaiveDate(local.year, local.month, local.day);
-
-    const calendar = await this.quoteContext.tradingDays(market, date, date);
-    const isTradingDay = calendar.tradingDays.some(
-      (day) => day.year === local.year && day.month === local.month && day.day === local.day,
+    const marketLocalDateTime = getMarketLocalDateTime(
+      this.now(),
+      MARKET_TIME_ZONES[instrument.market],
     );
+    const marketDate = new NaiveDate(
+      marketLocalDateTime.year,
+      marketLocalDateTime.month,
+      marketLocalDateTime.day,
+    );
+
+    const calendar = await this.quoteContext.tradingDays(market, marketDate, marketDate);
+    const isMarketDate = (day: { year: number; month: number; day: number }) =>
+      day.year === marketLocalDateTime.year &&
+      day.month === marketLocalDateTime.month &&
+      day.day === marketLocalDateTime.day;
+    const isTradingDay =
+      calendar.tradingDays.some(isMarketDate) ||
+      calendar.halfTradingDays?.some(isMarketDate) === true;
     if (!isTradingDay) return { isTrading: false, reason: "non-trading-day" };
 
     const marketSessions = await this.quoteContext.tradingSession();
     const sessions =
       marketSessions.find((session) => session.market === market)?.tradeSessions ?? [];
-    const currentSecond = local.hour * 3600 + local.minute * 60 + local.second;
-    const isInsideSession = sessions.some((session) => {
+    const currentSecond =
+      marketLocalDateTime.hour * 3600 +
+      marketLocalDateTime.minute * 60 +
+      marketLocalDateTime.second;
+    const activeSession = sessions.find((session) => {
       const begin = session.beginTime.hour * 3600 + session.beginTime.minute * 60;
       const end = session.endTime.hour * 3600 + session.endTime.minute * 60;
       return begin <= end
         ? currentSecond >= begin && currentSecond < end
         : currentSecond >= begin || currentSecond < end;
     });
-    if (!isInsideSession) return { isTrading: false, reason: "outside-trading-session" };
+    if (!activeSession) return { isTrading: false, reason: "outside-trading-session" };
+
+    const beginSecond = activeSession.beginTime.hour * 3600 + activeSession.beginTime.minute * 60;
+    const endSecond = activeSession.endTime.hour * 3600 + activeSession.endTime.minute * 60;
+    if (beginSecond > endSecond) return { isTrading: false, reason: "outside-trading-session" };
+
+    const session = fromLongbridgeTradeSession(activeSession.tradeSession);
+    if (!session) return { isTrading: false, reason: "outside-trading-session" };
 
     const [quote] = await this.quoteContext.quote([toLongbridgeSymbol(instrument)]);
     if (!quote || quote.tradeStatus !== TradeStatus.Normal) {
       return { isTrading: false, reason: "instrument-unavailable" };
     }
-    return { isTrading: true, reason: "trading" };
+    return { isTrading: true, reason: "trading", session };
   }
 
   async getQuotes(instruments: Instrument[]): Promise<MarketQuote[]> {
@@ -118,6 +140,13 @@ export class LongbridgeMarketDataProvider implements MarketDataProvider {
       lotSize: info.lotSize,
     }));
   }
+}
+
+function fromLongbridgeTradeSession(session: TradeSession): ProviderTradingSession | undefined {
+  if (session === TradeSession.Intraday) return "regular";
+  if (session === TradeSession.Pre) return "pre";
+  if (session === TradeSession.Post) return "post";
+  return undefined;
 }
 
 function toLongbridgeMarket(market: Instrument["market"]): Market {

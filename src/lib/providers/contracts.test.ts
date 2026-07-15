@@ -42,7 +42,7 @@ function order(overrides: Partial<BrokerOrder> = {}): BrokerOrder {
 
 class ContractMarketDataProvider implements MarketDataProvider {
   async getTradingStatus(_instrument: Instrument) {
-    return { isTrading: true as const, reason: "trading" as const };
+    return { isTrading: true as const, reason: "trading" as const, session: "regular" as const };
   }
 
   async getQuotes(instruments: Instrument[]) {
@@ -121,7 +121,11 @@ class ContractBrokerAdapter implements BrokerAdapter {
 test("MarketDataProvider contract exposes provider-neutral status, prices and lot sizes", async () => {
   const provider: MarketDataProvider = new ContractMarketDataProvider();
 
-  assert.deepEqual(await provider.getTradingStatus(apple), { isTrading: true, reason: "trading" });
+  assert.deepEqual(await provider.getTradingStatus(apple), {
+    isTrading: true,
+    reason: "trading",
+    session: "regular",
+  });
   assert.deepEqual(await provider.getQuotes([apple]), [{ instrument: apple, lastPrice: 200 }]);
   assert.equal((await provider.getOrderBook(apple)).asks[0]?.price, 201);
   assert.equal((await provider.getInstrumentInfo([apple]))[0]?.lotSize, 1);

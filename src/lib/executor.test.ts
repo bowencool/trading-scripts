@@ -60,7 +60,11 @@ function makeOrder(overrides: Partial<BrokerOrder> = {}): BrokerOrder {
 
 function makeMarketData(overrides: Partial<MarketDataProvider> = {}): MarketDataProvider {
   return {
-    getTradingStatus: async () => ({ isTrading: true, reason: "trading" }),
+    getTradingStatus: async () => ({
+      isTrading: true,
+      reason: "trading",
+      session: "regular",
+    }),
     getOrderBook: async (requested) => ({
       instrument: requested,
       bids: [{ price: 99, quantity: 10 }],
@@ -137,6 +141,38 @@ test("getEffectivePrice prefers order book and falls back through extended sessi
   });
 });
 
+test("getEffectivePrice uses only the active pre/post session quote", async () => {
+  let depthCalls = 0;
+  const marketData = makeMarketData({
+    getOrderBook: async (requested) => {
+      depthCalls += 1;
+      return {
+        instrument: requested,
+        bids: [{ price: 205, quantity: 10 }],
+        asks: [{ price: 206, quantity: 10 }],
+      };
+    },
+    getQuotes: async () => [
+      {
+        instrument,
+        lastPrice: 204,
+        preMarket: { price: 202 },
+        postMarket: { price: 201 },
+      },
+    ],
+  });
+
+  assert.deepEqual(await getEffectivePrice(marketData, instrument, "buy", "pre"), {
+    price: 202,
+    source: "盘前",
+  });
+  assert.deepEqual(await getEffectivePrice(marketData, instrument, "sell", "post"), {
+    price: 201,
+    source: "盘后",
+  });
+  assert.equal(depthCalls, 0);
+});
+
 test("new buys submit a provider-neutral bracket order", async () => {
   let captured: BracketOrderRequest | undefined;
   const apiCalls: string[] = [];
@@ -164,7 +200,7 @@ test("new buys submit a provider-neutral bracket order", async () => {
   const marketData = makeMarketData({
     getTradingStatus: async () => {
       apiCalls.push("trading-status");
-      return { isTrading: true, reason: "trading" };
+      return { isTrading: true, reason: "trading", session: "regular" };
     },
     getInstrumentInfo: async (requested) => {
       apiCalls.push("instrument-info");
@@ -198,7 +234,7 @@ test("new buys submit a provider-neutral bracket order", async () => {
       timeInForce: "day",
       quantity: 9,
       price: 102,
-      outsideRegularHours: true,
+      executionSession: "regular",
       remark: "auto-trade:buy:42",
     },
     protection: { stopLoss: 95, takeProfit: 110 },
@@ -296,6 +332,43 @@ test("closed markets skip new orders before querying balances or prices", async 
   assert.equal(submitted, false);
 });
 
+test("unsupported provider sessions fail closed before a buy", async () => {
+  let submitted = false;
+  let queriedBalance = false;
+  const broker = makeBroker({
+    getAccountBalances: async () => {
+      queriedBalance = true;
+      return [];
+    },
+    submitBracketOrder: async () => {
+      submitted = true;
+      throw new Error("must not submit");
+    },
+  });
+
+  await executeAction(
+    makeConfig(
+      broker,
+      makeMarketData({
+        getTradingStatus: async () => ({
+          isTrading: true,
+          reason: "trading",
+          session: "overnight" as never,
+        }),
+      }),
+    ),
+    {
+      action: "NEW_BUY",
+      instrument,
+      symbol: "AAPL",
+      record: makeRecord(),
+    },
+  );
+
+  assert.equal(queriedBalance, false);
+  assert.equal(submitted, false);
+});
+
 test("new orders re-check the session immediately before submission", async () => {
   let statusChecks = 0;
   let submitted = false;
@@ -309,7 +382,7 @@ test("new orders re-check the session immediately before submission", async () =
     getTradingStatus: async () => {
       statusChecks += 1;
       return statusChecks === 1
-        ? { isTrading: true, reason: "trading" }
+        ? { isTrading: true, reason: "trading", session: "regular" }
         : { isTrading: false, reason: "outside-trading-session" };
     },
   });
@@ -407,7 +480,7 @@ test("sells restore canceled protection when the session closes before submissio
       statusChecks += 1;
       calls.push(`status:${statusChecks}`);
       return statusChecks === 1
-        ? { isTrading: true, reason: "trading" }
+        ? { isTrading: true, reason: "trading", session: "regular" }
         : { isTrading: false, reason: "outside-trading-session" };
     },
   });
@@ -460,6 +533,39 @@ test("sells restore canceled protection when the session closes before submissio
   ]);
 });
 
+test("unsupported provider sessions fail closed before a sell", async () => {
+  let submitted = false;
+  const broker = makeBroker({
+    submitOrder: async () => {
+      submitted = true;
+      return makeOrder();
+    },
+  });
+  const marketData = makeMarketData({
+    getTradingStatus: async () => ({
+      isTrading: true,
+      reason: "trading",
+      session: "overnight" as never,
+    }),
+  });
+
+  await executeAction(makeConfig(broker, marketData), {
+    action: "SELL_FULL",
+    instrument,
+    symbol: "AAPL",
+    record: { ...makeRecord(), operation_advice: "卖出" },
+    holding: {
+      instrument,
+      symbol: "AAPL",
+      quantity: 100,
+      availableQuantity: 100,
+      costPrice: 90,
+    },
+  });
+
+  assert.equal(submitted, false);
+});
+
 test("closed markets skip replacing pending entry orders", async () => {
   let replaced = false;
   const broker = makeBroker({
@@ -476,6 +582,49 @@ test("closed markets skip replacing pending entry orders", async () => {
         getTradingStatus: async () => ({
           isTrading: false,
           reason: "outside-trading-session",
+        }),
+      }),
+    ),
+    {
+      action: "UPDATE_BUY",
+      instrument,
+      symbol: "AAPL",
+      record: makeRecord(),
+      pendingBuyOrder: {
+        orderId: "buy-1",
+        symbol: "AAPL",
+        side: "Buy",
+        orderType: "limit",
+        price: "101",
+        triggerPrice: "0",
+        quantity: "9",
+        status: "pending",
+        role: "buy",
+        remark: "auto-trade:buy:41",
+      },
+    },
+  );
+
+  assert.equal(replaced, false);
+});
+
+test("unsupported provider sessions skip replacing an order", async () => {
+  let replaced = false;
+  const broker = makeBroker({
+    replaceOrder: async () => {
+      replaced = true;
+      return makeOrder();
+    },
+  });
+
+  await executeAction(
+    makeConfig(
+      broker,
+      makeMarketData({
+        getTradingStatus: async () => ({
+          isTrading: true,
+          reason: "trading",
+          session: "overnight" as never,
         }),
       }),
     ),

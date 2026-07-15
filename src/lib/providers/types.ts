@@ -44,11 +44,13 @@ export type TradingStatusReason =
   | "outside-trading-session"
   | "instrument-unavailable";
 
+export type TradingSession = "regular" | "pre" | "post";
+export type OrderExecutionSession = TradingSession | "any";
+
 /** Provider-neutral snapshot used to fail closed before submitting an entry/exit order. */
-export interface TradingStatus {
-  isTrading: boolean;
-  reason: TradingStatusReason;
-}
+export type TradingStatus =
+  | { isTrading: true; reason: "trading"; session: TradingSession }
+  | { isTrading: false; reason: Exclude<TradingStatusReason, "trading"> };
 
 export interface AccountBalance {
   currency: Currency;
@@ -112,7 +114,7 @@ export interface SubmitOrderRequest {
   price?: number;
   triggerPrice?: number;
   timeInForce: TimeInForce;
-  outsideRegularHours?: boolean;
+  executionSession?: OrderExecutionSession;
   remark?: string;
 }
 

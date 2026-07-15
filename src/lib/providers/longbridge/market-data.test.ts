@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Market, TradeStatus } from "longbridge";
+import { Market, TradeSession, TradeStatus } from "longbridge";
 import { LongbridgeMarketDataProvider } from "./market-data.js";
 import { fromLongbridgeSymbol, toLongbridgeSymbol } from "./symbols.js";
 
@@ -117,7 +117,7 @@ test("maps instrument lot sizes and avoids SDK calls for empty batches", async (
   assert.equal(calls, 1);
 });
 
-test("reports a weekend without querying sessions or security status", async () => {
+test("reports a weekend without querying security status", async () => {
   const calls: string[] = [];
   const quoteContext = {
     tradingDays: async (
@@ -133,7 +133,18 @@ test("reports a weekend without querying sessions or security status", async () 
     },
     tradingSession: async () => {
       calls.push("trading-session");
-      return [];
+      return [
+        {
+          market: Market.HK,
+          tradeSessions: [
+            {
+              beginTime: time(9, 30),
+              endTime: time(16, 0),
+              tradeSession: TradeSession.Intraday,
+            },
+          ],
+        },
+      ];
     },
     quote: async () => {
       calls.push("quote");
@@ -161,8 +172,16 @@ test("reports Hong Kong lunch break and after-hours as outside trading sessions"
           {
             market: Market.HK,
             tradeSessions: [
-              { beginTime: time(9, 30), endTime: time(12, 0) },
-              { beginTime: time(13, 0), endTime: time(16, 0) },
+              {
+                beginTime: time(9, 30),
+                endTime: time(12, 0),
+                tradeSession: TradeSession.Intraday,
+              },
+              {
+                beginTime: time(13, 0),
+                endTime: time(16, 0),
+                tradeSession: TradeSession.Intraday,
+              },
             ],
           },
         ],
@@ -201,7 +220,13 @@ test("reports an open session only when the security is tradable", async () => {
       return [
         {
           market: Market.HK,
-          tradeSessions: [{ beginTime: time(9, 30), endTime: time(12, 0) }],
+          tradeSessions: [
+            {
+              beginTime: time(9, 30),
+              endTime: time(12, 0),
+              tradeSession: TradeSession.Intraday,
+            },
+          ],
         },
       ];
     },
@@ -219,30 +244,184 @@ test("reports an open session only when the security is tradable", async () => {
   assert.deepEqual(await provider.getTradingStatus({ symbol: "00700", market: "HK" }), {
     isTrading: true,
     reason: "trading",
+    session: "regular",
   });
   assert.deepEqual(calls, ["trading-days", "trading-session", "quote"]);
 });
 
-test("uses market-local time with US daylight saving time", async () => {
+test("treats half trading days as tradable during regular and pre-market sessions", async () => {
+  for (const scenario of [
+    {
+      now: "2026-11-27T15:00:00Z",
+      begin: time(9, 30),
+      end: time(13, 0),
+      longbridgeSession: TradeSession.Intraday,
+      expectedSession: "regular",
+    },
+    {
+      now: "2026-11-27T13:00:00Z",
+      begin: time(4, 0),
+      end: time(9, 30),
+      longbridgeSession: TradeSession.Pre,
+      expectedSession: "pre",
+    },
+  ] as const) {
+    const provider = new LongbridgeMarketDataProvider(
+      {
+        tradingDays: async () => ({
+          tradingDays: [],
+          halfTradingDays: [tradingDay(2026, 11, 27)],
+        }),
+        tradingSession: async () => [
+          {
+            market: Market.US,
+            tradeSessions: [
+              {
+                beginTime: scenario.begin,
+                endTime: scenario.end,
+                tradeSession: scenario.longbridgeSession,
+              },
+            ],
+          },
+        ],
+        quote: async () => [{ tradeStatus: TradeStatus.Normal }],
+      } as never,
+      () => new Date(scenario.now),
+    );
+
+    assert.deepEqual(await provider.getTradingStatus({ symbol: "AAPL", market: "US" }), {
+      isTrading: true,
+      reason: "trading",
+      session: scenario.expectedSession,
+    });
+  }
+});
+
+test("derives the New York market date and time from an absolute Date", async () => {
   const provider = new LongbridgeMarketDataProvider(
     {
-      tradingDays: async (_market: Market, begin: { year: number; month: number; day: number }) => {
+      tradingDays: async (
+        _market: Market,
+        begin: { year: number; month: number; day: number },
+        end: { year: number; month: number; day: number },
+      ) => {
         assert.deepEqual([begin.year, begin.month, begin.day], [2026, 7, 15]);
+        assert.deepEqual([end.year, end.month, end.day], [2026, 7, 15]);
         return { tradingDays: [tradingDay(2026, 7, 15)] };
       },
       tradingSession: async () => [
         {
           market: Market.US,
-          tradeSessions: [{ beginTime: time(9, 30), endTime: time(16, 0) }],
+          tradeSessions: [
+            {
+              beginTime: time(16, 0),
+              endTime: time(20, 0),
+              tradeSession: TradeSession.Post,
+            },
+          ],
         },
       ],
       quote: async () => [{ tradeStatus: TradeStatus.Normal }],
     } as never,
-    () => new Date("2026-07-15T13:45:00Z"),
+    // The absolute instant is July 16 in Asia/Shanghai but July 15 19:00 in New York.
+    () => new Date("2026-07-15T23:00:00Z"),
   );
 
   assert.deepEqual(await provider.getTradingStatus({ symbol: "AAPL", market: "US" }), {
     isTrading: true,
     reason: "trading",
+    session: "post",
   });
+});
+
+test("maps Longbridge pre-market and post-market sessions to provider-neutral sessions", async () => {
+  for (const scenario of [
+    { now: "2026-07-15T12:00:00Z", expected: "pre" },
+    { now: "2026-07-15T21:00:00Z", expected: "post" },
+  ] as const) {
+    const provider = new LongbridgeMarketDataProvider(
+      {
+        tradingDays: async () => ({
+          tradingDays: [tradingDay(2026, 7, 15), tradingDay(2026, 7, 16)],
+        }),
+        tradingSession: async () => [
+          {
+            market: Market.US,
+            tradeSessions: [
+              {
+                beginTime: time(4, 0),
+                endTime: time(9, 30),
+                tradeSession: TradeSession.Pre,
+              },
+              {
+                beginTime: time(16, 0),
+                endTime: time(20, 0),
+                tradeSession: TradeSession.Post,
+              },
+            ],
+          },
+        ],
+        quote: async () => [{ tradeStatus: TradeStatus.Normal }],
+      } as never,
+      () => new Date(scenario.now),
+    );
+
+    assert.deepEqual(await provider.getTradingStatus({ symbol: "AAPL", market: "US" }), {
+      isTrading: true,
+      reason: "trading",
+      session: scenario.expected,
+    });
+  }
+});
+
+test("fails closed for Longbridge overnight and unknown sessions", async () => {
+  const scenarios = [
+    {
+      name: "overnight",
+      now: "2026-07-16T01:00:00Z",
+      begin: time(20, 0),
+      end: time(4, 0),
+      session: TradeSession.Overnight,
+    },
+    {
+      name: "unknown",
+      now: "2026-07-15T14:00:00Z",
+      begin: time(9, 30),
+      end: time(16, 0),
+      session: 99 as TradeSession,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    let quoteCalls = 0;
+    const provider = new LongbridgeMarketDataProvider(
+      {
+        tradingDays: async () => ({ tradingDays: [tradingDay(2026, 7, 15)] }),
+        tradingSession: async () => [
+          {
+            market: Market.US,
+            tradeSessions: [
+              {
+                beginTime: scenario.begin,
+                endTime: scenario.end,
+                tradeSession: scenario.session,
+              },
+            ],
+          },
+        ],
+        quote: async () => {
+          quoteCalls += 1;
+          return [{ tradeStatus: TradeStatus.Normal }];
+        },
+      } as never,
+      () => new Date(scenario.now),
+    );
+
+    assert.deepEqual(
+      await provider.getTradingStatus({ symbol: "AAPL", market: "US" }),
+      { isTrading: false, reason: "outside-trading-session" },
+      scenario.name,
+    );
+    assert.equal(quoteCalls, 0, scenario.name);
+  }
 });

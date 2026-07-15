@@ -4,7 +4,13 @@ import { calculateBuyQuantity } from "./position-sizing.js";
 import { computeBuyLimitPrice } from "./pricing.js";
 import type { BrokerAdapter } from "./providers/broker.js";
 import type { MarketDataProvider } from "./providers/market-data.js";
-import type { BrokerOrder, Currency, Instrument, ProtectionOrderIds } from "./providers/types.js";
+import type {
+  BrokerOrder,
+  Currency,
+  Instrument,
+  ProtectionOrderIds,
+  TradingSession,
+} from "./providers/types.js";
 import type { ActionPlan, ActiveOrder, AnalysisRecord } from "./types.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -41,10 +47,14 @@ async function ensureTradingNow(
   marketData: MarketDataProvider,
   instrument: Instrument,
   symbol: string,
-): Promise<boolean> {
+): Promise<TradingSession | undefined> {
   try {
     const status = await marketData.getTradingStatus(instrument);
-    if (status.isTrading) return true;
+    if (status.isTrading) {
+      if (isSupportedTradingSession(status.session)) return status.session;
+      console.log(`[SKIP] ${symbol} - 行情源返回不支持的交易时段，已跳过`);
+      return undefined;
+    }
 
     const reasons = {
       "non-trading-day": "今天是周末或休市日",
@@ -56,19 +66,37 @@ async function ensureTradingNow(
   } catch (error) {
     console.error(`[SKIP] ${symbol} - 无法确认当前交易状态，为避免误下单已跳过: ${error}`);
   }
-  return false;
+  return undefined;
+}
+
+function isSupportedTradingSession(value: unknown): value is TradingSession {
+  return value === "regular" || value === "pre" || value === "post";
 }
 
 /**
  * Get the best available price for a symbol.
- * For buy side: prefer ask1 (卖一价) → pre/post/overnight → lastDone.
- * For sell side: prefer bid1 (买一价) → pre/post/overnight → lastDone.
+ * Extended sessions use only their matching session quote so stale regular-session
+ * depth or another extended session cannot leak into an order price.
  */
 export async function getEffectivePrice(
   marketData: MarketDataProvider,
   instrument: Instrument,
   side: "buy" | "sell",
+  session?: TradingSession,
 ): Promise<{ price: number; source: string }> {
+  if (session && session !== "regular") {
+    const quotes = await marketData.getQuotes([instrument]);
+    const quote = quotes[0];
+    const sessionQuote =
+      session === "pre"
+        ? { value: quote?.preMarket, label: "盘前" }
+        : { value: quote?.postMarket, label: "盘后" };
+    if (sessionQuote.value && sessionQuote.value.price > 0) {
+      return { price: sessionQuote.value.price, source: sessionQuote.label };
+    }
+    return { price: 0, source: "N/A" };
+  }
+
   try {
     const depth = await marketData.getOrderBook(instrument);
     const entries = side === "buy" ? depth.asks : depth.bids;
@@ -83,15 +111,16 @@ export async function getEffectivePrice(
   const quotes = await marketData.getQuotes([instrument]);
   if (quotes.length > 0) {
     const q = quotes[0];
-    for (const [key, label] of [
-      ["preMarket", "盘前"],
-      ["postMarket", "盘后"],
-      ["overnight", "夜盘"],
-    ] as const) {
-      const pq = q[key];
-      if (pq) {
-        const p = pq.price;
-        if (p > 0) return { price: p, source: label };
+    if (!session) {
+      for (const [key, label] of [
+        ["preMarket", "盘前"],
+        ["postMarket", "盘后"],
+      ] as const) {
+        const pq = q[key];
+        if (pq) {
+          const p = pq.price;
+          if (p > 0) return { price: p, source: label };
+        }
       }
     }
     if (q.lastPrice > 0) return { price: q.lastPrice, source: "lastDone" };
@@ -140,7 +169,8 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
 
   printAnalysisRecord(record);
 
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+  const initialSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!initialSession) return;
 
   const currency = getCurrency(instrument);
 
@@ -151,6 +181,7 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     marketData,
     instrument,
     "buy",
+    initialSession,
   );
   const lotSize = staticInfos.length > 0 ? staticInfos[0].lotSize : 1;
 
@@ -231,6 +262,14 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     }
   }
 
+  // Re-check immediately before submission in case an interactive confirmation crossed a boundary.
+  const executionSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!executionSession) return;
+  if (executionSession !== initialSession) {
+    console.log(`[SKIP] ${symbol} - 交易时段已变化，为避免使用跨时段价格或产生无保护仓位已跳过`);
+    return;
+  }
+
   const entryRequest = {
     instrument,
     type: "limit" as const,
@@ -238,12 +277,9 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     timeInForce: "day" as const,
     quantity: qty,
     price: threshold,
-    outsideRegularHours: true,
+    executionSession,
     remark: `auto-trade:buy:${record.id}`,
   };
-
-  // Re-check immediately before submission in case an interactive confirmation crossed a boundary.
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
 
   let buyDetail: BrokerOrder;
   if (isAddPosition) {
@@ -311,7 +347,8 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
 
   printAnalysisRecord(record);
 
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+  const initialSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!initialSession) return;
 
   const threshold = computeBuyLimitPrice(targetPrice, priceThresholdPct);
   const pendingPrice = Number(pendingBuyOrder.price);
@@ -331,7 +368,12 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
     }
   }
 
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+  const executionSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!executionSession) return;
+  if (executionSession !== initialSession) {
+    console.log(`[SKIP] ${symbol} - 交易时段已变化且改单接口无法切换执行时段，已保留原订单`);
+    return;
+  }
 
   try {
     await broker.replaceOrder({
@@ -398,7 +440,8 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   printAnalysisRecord(record);
 
   const isPartial = action === "SELL_PARTIAL";
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+  const initialSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!initialSession) return;
 
   const sellPct = plan.sellPct ?? cfgSellPct;
 
@@ -446,6 +489,7 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
     marketData,
     instrument,
     "sell",
+    initialSession,
   );
   const costPrice = holding.costPrice;
 
@@ -483,7 +527,11 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
 
   const remark = isPartial ? `auto-trade:reduce:${record.id}` : `auto-trade:sell:${record.id}`;
 
-  if (!(await ensureTradingNow(marketData, instrument, symbol))) {
+  const executionSession = await ensureTradingNow(marketData, instrument, symbol);
+  if (!executionSession || executionSession !== initialSession) {
+    if (executionSession && executionSession !== initialSession) {
+      console.log(`[SKIP] ${symbol} - 交易时段已变化，为避免使用跨时段价格已跳过卖出`);
+    }
     if (cancelledOrderIds.length > 0) {
       await rollbackSlTp(cfg, instrument, record, holding.quantity);
     }
@@ -498,7 +546,7 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
       timeInForce: "day",
       quantity: sellQty,
       price: sellPrice,
-      outsideRegularHours: true,
+      executionSession,
       remark,
     });
 
