@@ -1,18 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
-import type { AnalysisRecord } from "./types.js";
+import type { AnalysisAction, AnalysisRecord } from "./types.js";
 
 const BASE_COLUMNS = `id, code, name, report_type, sentiment_score,
   operation_advice, trend_prediction, analysis_summary,
   ideal_buy, secondary_buy, stop_loss, take_profit, created_at`;
 
-const BUY_ADVICE = new Set(["买入", "加仓"]);
-const SELL_ADVICE = new Set(["卖出", "减仓"]);
 const TREND_BUY = new Set(["看多", "强烈看多"]);
 const TREND_SELL = new Set(["看空", "强烈看空"]);
 const TREND_OVERRIDABLE_ADVICE = new Set(["", "持有", "观望"]);
-const STRUCTURED_BUY_ACTION = new Set(["buy", "add"]);
-const STRUCTURED_SELL_ACTION = new Set(["reduce", "sell"]);
-const STRUCTURED_NEUTRAL_ACTION = new Set(["hold", "watch", "avoid", "alert"]);
+const STRUCTURED_ACTIONS = new Set<AnalysisAction>([
+  "buy",
+  "add",
+  "reduce",
+  "sell",
+  "hold",
+  "watch",
+  "avoid",
+  "alert",
+]);
+const BUY_ACTIONS = new Set<AnalysisAction>(["buy", "add"]);
+const SELL_ACTIONS = new Set<AnalysisAction>(["reduce", "sell"]);
 
 const A_SHARE_RE = /^[036]\d+$/;
 
@@ -26,7 +33,9 @@ const SLTP_WINDOW_HOURS = 24;
 
 // ── 原始获取 ──────────────────────────────────────────────────────────────
 
-function fetchRaw(dbPath: string, hours: number): AnalysisRecord[] {
+type RawAnalysisRecord = Omit<AnalysisRecord, "action">;
+
+function fetchRaw(dbPath: string, hours: number): RawAnalysisRecord[] {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     return db
@@ -36,7 +45,7 @@ function fetchRaw(dbPath: string, hours: number): AnalysisRecord[] {
          WHERE created_at >= datetime('now', '-${hours} hours')
          ORDER BY created_at DESC`,
       )
-      .all() as unknown as AnalysisRecord[];
+      .all() as unknown as RawAnalysisRecord[];
   } finally {
     db.close();
   }
@@ -57,8 +66,8 @@ function fetchLatestSlTpRecord(dbPath: string, code: string): AnalysisRecord | n
          ORDER BY created_at DESC
          LIMIT 1`,
       )
-      .all(code) as unknown as AnalysisRecord[];
-    return rows.length > 0 ? rows[0] : null;
+      .all(code) as unknown as RawAnalysisRecord[];
+    return rows.length > 0 ? normalizeRecord(rows[0]) : null;
   } finally {
     db.close();
   }
@@ -89,26 +98,41 @@ function selectColumns(db: DatabaseSync): string {
   return `${BASE_COLUMNS}, ${rawResultColumn}`;
 }
 
-function parseStructuredAction(rawResult: string | null): string | null {
+function parseStructuredAction(rawResult: string | null): AnalysisAction | null {
   if (!rawResult) return null;
 
   try {
     const parsed = JSON.parse(rawResult) as { action?: unknown };
-    return typeof parsed.action === "string" ? parsed.action.trim().toLowerCase() : null;
+    if (typeof parsed.action !== "string") return null;
+    const action = parsed.action.trim().toLowerCase();
+    return STRUCTURED_ACTIONS.has(action as AnalysisAction) ? (action as AnalysisAction) : null;
   } catch {
     return null;
   }
 }
 
-function normalizeRecordForStructuredAction(
-  record: AnalysisRecord,
-  action: string,
-): AnalysisRecord {
-  if (action === "add") return { ...record, operation_advice: "加仓" };
-  if (action === "reduce") return { ...record, operation_advice: "减仓" };
-  if (action === "buy") return { ...record, operation_advice: "买入" };
-  if (action === "sell") return { ...record, operation_advice: "卖出" };
-  return record;
+function parseLegacyAction(record: RawAnalysisRecord): AnalysisAction | null {
+  const advice = record.operation_advice ?? "";
+  const trend = record.trend_prediction ?? "";
+
+  if (advice === "买入") return "buy";
+  if (advice === "加仓") return "add";
+  if (advice === "减仓") return "reduce";
+  if (advice === "卖出") return "sell";
+  if (TREND_OVERRIDABLE_ADVICE.has(advice)) {
+    if (TREND_BUY.has(trend)) return "buy";
+    if (TREND_SELL.has(trend)) return "sell";
+  }
+  if (advice === "持有") return "hold";
+  if (advice === "观望") return "watch";
+  return null;
+}
+
+function normalizeRecord(record: RawAnalysisRecord): AnalysisRecord {
+  return {
+    ...record,
+    action: parseStructuredAction(record.raw_result) ?? parseLegacyAction(record),
+  };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -129,7 +153,8 @@ export function queryAll(dbPath: string): {
   const buySignals: AnalysisRecord[] = [];
   const sellSignals: AnalysisRecord[] = [];
 
-  for (const record of raw) {
+  for (const rawRecord of raw) {
+    const record = normalizeRecord(rawRecord);
     // Build recent reports list (all symbols except A-shares)
     if (!A_SHARE_RE.test(record.code) && !recentSeen.has(record.code)) {
       recentSeen.set(record.code, record);
@@ -145,42 +170,19 @@ export function queryAll(dbPath: string): {
 
     tradeSeen.set(record.code, record);
 
-    const structuredAction = parseStructuredAction(record.raw_result);
-    if (structuredAction) {
-      if (STRUCTURED_BUY_ACTION.has(structuredAction)) {
+    const action = record.action;
+    if (action) {
+      if (BUY_ACTIONS.has(action)) {
         if (record.ideal_buy == null) {
           continue;
         }
-        buySignals.push(normalizeRecordForStructuredAction(record, structuredAction));
+        buySignals.push(record);
         continue;
       }
 
-      if (STRUCTURED_SELL_ACTION.has(structuredAction)) {
-        sellSignals.push(normalizeRecordForStructuredAction(record, structuredAction));
-        continue;
+      if (SELL_ACTIONS.has(action)) {
+        sellSignals.push(record);
       }
-
-      if (STRUCTURED_NEUTRAL_ACTION.has(structuredAction)) {
-        continue;
-      }
-    }
-
-    const advice = record.operation_advice ?? "";
-    const trend = record.trend_prediction ?? "";
-
-    if (BUY_ADVICE.has(advice) || (TREND_OVERRIDABLE_ADVICE.has(advice) && TREND_BUY.has(trend))) {
-      if (record.ideal_buy == null) {
-        continue;
-      }
-      buySignals.push(record);
-      continue;
-    }
-
-    if (
-      SELL_ADVICE.has(advice) ||
-      (TREND_OVERRIDABLE_ADVICE.has(advice) && TREND_SELL.has(trend))
-    ) {
-      sellSignals.push(record);
     }
   }
 
@@ -199,8 +201,8 @@ export function queryRecordById(dbPath: string, id: number): AnalysisRecord | nu
   try {
     const rows = db
       .prepare(`SELECT ${selectColumns(db)} FROM analysis_history WHERE id = ?`)
-      .all(id) as unknown as AnalysisRecord[];
-    return rows.length > 0 ? rows[0] : null;
+      .all(id) as unknown as RawAnalysisRecord[];
+    return rows.length > 0 ? normalizeRecord(rows[0]) : null;
   } finally {
     db.close();
   }
@@ -224,8 +226,8 @@ export function querySlTpRecord(dbPath: string, code: string): AnalysisRecord | 
          ORDER BY created_at DESC
          LIMIT 1`,
       )
-      .all(code) as unknown as AnalysisRecord[];
-    if (rows.length > 0) return rows[0];
+      .all(code) as unknown as RawAnalysisRecord[];
+    if (rows.length > 0) return normalizeRecord(rows[0]);
   } finally {
     db.close();
   }

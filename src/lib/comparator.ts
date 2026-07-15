@@ -62,7 +62,7 @@ export function buildActionPlan(
 
     const holding = portfolio.holdings.get(symbol);
     const pendingBuy = portfolio.activeOrders.find((o) => o.symbol === symbol && o.role === "buy");
-    const isAddPosition = (record.operation_advice ?? "").includes("加仓");
+    const isAddPosition = record.action === "add";
 
     if (holding) {
       if (!isAddPosition) {
@@ -143,7 +143,7 @@ export function buildActionPlan(
       continue;
     }
 
-    const isPartial = (record.operation_advice ?? "").includes("减仓");
+    const isPartial = record.action === "reduce";
     const slOrders = portfolio.activeOrders.filter(
       (o) => o.symbol === symbol && o.role === "stop_loss",
     );
@@ -531,6 +531,7 @@ function makeDummyRecord(symbol: string): AnalysisRecord {
     name: null,
     report_type: null,
     sentiment_score: null,
+    action: "hold",
     operation_advice: "持有",
     trend_prediction: null,
     analysis_summary: null,

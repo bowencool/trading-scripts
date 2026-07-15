@@ -76,6 +76,7 @@ function insertRecord(db: DatabaseSync, overrides: Partial<AnalysisRecord> = {})
     name: "Apple",
     report_type: "agent",
     sentiment_score: 65,
+    action: null,
     operation_advice: "观望",
     trend_prediction: "震荡",
     analysis_summary: null,
@@ -121,6 +122,7 @@ function insertLegacyRecord(db: DatabaseSync, overrides: Partial<AnalysisRecord>
     name: "Apple",
     report_type: "agent",
     sentiment_score: 65,
+    action: null,
     operation_advice: "观望",
     trend_prediction: "震荡",
     analysis_summary: null,
@@ -171,6 +173,7 @@ test("queryAll keeps sell signals even when take_profit is missing", () => {
     assert.equal(result.sellSignals.length, 1);
     assert.equal(result.sellSignals[0]?.code, "AAPL");
     assert.equal(result.sellSignals[0]?.take_profit, null);
+    assert.equal(result.sellSignals[0]?.action, "sell");
   });
 });
 
@@ -186,6 +189,7 @@ test("queryAll treats bullish trend on hold advice as buy signal", () => {
 
     assert.equal(result.buySignals.length, 1);
     assert.equal(result.buySignals[0]?.code, "AAPL");
+    assert.equal(result.buySignals[0]?.action, "buy");
     assert.equal(result.sellSignals.length, 0);
   });
 });
@@ -232,6 +236,7 @@ test("queryAll keeps explicit operation advice ahead of trend prediction", () =>
     assert.equal(result.buySignals.length, 0);
     assert.equal(result.sellSignals.length, 1);
     assert.equal(result.sellSignals[0]?.operation_advice, "卖出");
+    assert.equal(result.sellSignals[0]?.action, "sell");
   });
 });
 
@@ -249,11 +254,12 @@ test("queryAll uses structured buy action ahead of neutral text", () => {
 
     assert.equal(result.buySignals.length, 1);
     assert.equal(result.buySignals[0]?.code, "AAPL");
+    assert.equal(result.buySignals[0]?.action, "buy");
     assert.equal(result.sellSignals.length, 0);
   });
 });
 
-test("queryAll maps structured add action to add-position semantics", () => {
+test("queryAll preserves structured add action without rewriting display advice", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
       operation_advice: "观望",
@@ -265,11 +271,12 @@ test("queryAll maps structured add action to add-position semantics", () => {
     const result = queryAll(dbPath);
 
     assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.operation_advice, "加仓");
+    assert.equal(result.buySignals[0]?.action, "add");
+    assert.equal(result.buySignals[0]?.operation_advice, "观望");
   });
 });
 
-test("queryAll maps structured reduce action to partial-sell semantics", () => {
+test("queryAll preserves structured reduce action without rewriting display advice", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
       operation_advice: "观望",
@@ -280,7 +287,8 @@ test("queryAll maps structured reduce action to partial-sell semantics", () => {
     const result = queryAll(dbPath);
 
     assert.equal(result.sellSignals.length, 1);
-    assert.equal(result.sellSignals[0]?.operation_advice, "减仓");
+    assert.equal(result.sellSignals[0]?.action, "reduce");
+    assert.equal(result.sellSignals[0]?.operation_advice, "观望");
     assert.equal(result.buySignals.length, 0);
   });
 });
@@ -315,6 +323,7 @@ test("queryAll falls back to legacy text rules when structured action is invalid
 
     assert.equal(result.buySignals.length, 1);
     assert.equal(result.buySignals[0]?.code, "AAPL");
+    assert.equal(result.buySignals[0]?.action, "buy");
   });
 });
 
@@ -330,6 +339,7 @@ test("queryAll falls back to legacy text rules when raw_result column is missing
 
     assert.equal(result.buySignals.length, 1);
     assert.equal(result.buySignals[0]?.code, "AAPL");
+    assert.equal(result.buySignals[0]?.action, "buy");
     assert.equal(result.buySignals[0]?.raw_result, null);
   });
 });

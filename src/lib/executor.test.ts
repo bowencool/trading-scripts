@@ -26,6 +26,7 @@ function makeRecord(): AnalysisRecord {
     name: "Apple",
     report_type: "agent",
     sentiment_score: 80,
+    action: "buy",
     operation_advice: "买入",
     trend_prediction: "看多",
     analysis_summary: null,
@@ -258,7 +259,7 @@ test("add-position buys wait for the entry and sync protection to total quantity
     action: "ADD_POSITION",
     instrument,
     symbol: "AAPL",
-    record: { ...makeRecord(), operation_advice: "加仓" },
+    record: { ...makeRecord(), action: "add", operation_advice: "加仓" },
     holding: {
       instrument,
       symbol: "AAPL",

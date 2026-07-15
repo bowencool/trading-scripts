@@ -2,6 +2,16 @@ import type { Instrument } from "./providers/types.js";
 
 // ── DB record ─────────────────────────────────────────────────────────────────
 
+export type AnalysisAction =
+  | "buy"
+  | "add"
+  | "reduce"
+  | "sell"
+  | "hold"
+  | "watch"
+  | "avoid"
+  | "alert";
+
 export interface AnalysisRecord {
   id: number;
   query_id: string | null;
@@ -9,6 +19,8 @@ export interface AnalysisRecord {
   name: string | null;
   report_type: string | null;
   sentiment_score: number | null;
+  /** Normalized action used by trading control flow. */
+  action: AnalysisAction | null;
   operation_advice: string | null;
   trend_prediction: string | null;
   analysis_summary: string | null;
