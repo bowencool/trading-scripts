@@ -60,6 +60,7 @@ function makeOrder(overrides: Partial<BrokerOrder> = {}): BrokerOrder {
 
 function makeMarketData(overrides: Partial<MarketDataProvider> = {}): MarketDataProvider {
   return {
+    getTradingStatus: async () => ({ isTrading: true, reason: "trading" }),
     getOrderBook: async (requested) => ({
       instrument: requested,
       bids: [{ price: 99, quantity: 10 }],
@@ -161,6 +162,10 @@ test("new buys submit a provider-neutral bracket order", async () => {
     record: makeRecord(),
   };
   const marketData = makeMarketData({
+    getTradingStatus: async () => {
+      apiCalls.push("trading-status");
+      return { isTrading: true, reason: "trading" };
+    },
     getInstrumentInfo: async (requested) => {
       apiCalls.push("instrument-info");
       return requested.map((item) => ({ instrument: item, lotSize: 1 }));
@@ -178,9 +183,11 @@ test("new buys submit a provider-neutral bracket order", async () => {
   await executeAction(makeConfig(broker, marketData), plan);
 
   assert.deepEqual(apiCalls, [
+    "trading-status",
     "instrument-info",
     "account-balances",
     "order-book",
+    "trading-status",
     "submit-bracket",
   ]);
   assert.deepEqual(captured, {
@@ -259,4 +266,277 @@ test("add-position buys wait for the entry and sync protection to total quantity
     takeProfit: 110,
     existing: { stopLossOrderId: "sl-1", takeProfitOrderId: "tp-1" },
   });
+});
+
+test("closed markets skip new orders before querying balances or prices", async () => {
+  let submitted = false;
+  let queriedBalance = false;
+  const broker = makeBroker({
+    getAccountBalances: async () => {
+      queriedBalance = true;
+      return [];
+    },
+    submitBracketOrder: async () => {
+      submitted = true;
+      throw new Error("must not submit");
+    },
+  });
+  const marketData = makeMarketData({
+    getTradingStatus: async () => ({ isTrading: false, reason: "non-trading-day" }),
+  });
+
+  await executeAction(makeConfig(broker, marketData), {
+    action: "NEW_BUY",
+    instrument,
+    symbol: "AAPL",
+    record: makeRecord(),
+  });
+
+  assert.equal(queriedBalance, false);
+  assert.equal(submitted, false);
+});
+
+test("new orders re-check the session immediately before submission", async () => {
+  let statusChecks = 0;
+  let submitted = false;
+  const broker = makeBroker({
+    submitBracketOrder: async () => {
+      submitted = true;
+      throw new Error("must not submit");
+    },
+  });
+  const marketData = makeMarketData({
+    getTradingStatus: async () => {
+      statusChecks += 1;
+      return statusChecks === 1
+        ? { isTrading: true, reason: "trading" }
+        : { isTrading: false, reason: "outside-trading-session" };
+    },
+  });
+
+  await executeAction(makeConfig(broker, marketData), {
+    action: "NEW_BUY",
+    instrument,
+    symbol: "AAPL",
+    record: makeRecord(),
+  });
+
+  assert.equal(statusChecks, 2);
+  assert.equal(submitted, false);
+});
+
+test("closed markets skip sells before canceling protection orders", async () => {
+  let canceled = false;
+  let submitted = false;
+  const broker = makeBroker({
+    cancelOrder: async () => {
+      canceled = true;
+    },
+    submitOrder: async () => {
+      submitted = true;
+      return makeOrder();
+    },
+  });
+
+  await executeAction(
+    makeConfig(
+      broker,
+      makeMarketData({
+        getTradingStatus: async () => ({
+          isTrading: false,
+          reason: "outside-trading-session",
+        }),
+      }),
+    ),
+    {
+      action: "SELL_FULL",
+      instrument,
+      symbol: "AAPL",
+      record: { ...makeRecord(), operation_advice: "卖出" },
+      holding: {
+        instrument,
+        symbol: "AAPL",
+        quantity: 100,
+        availableQuantity: 100,
+        costPrice: 90,
+      },
+      existingSlOrder: {
+        orderId: "sl-1",
+        symbol: "AAPL",
+        side: "Sell",
+        orderType: "market-if-touched",
+        price: "0",
+        triggerPrice: "95",
+        quantity: "100",
+        status: "pending",
+        role: "stop_loss",
+        remark: "auto-trade:sl:42",
+      },
+    },
+  );
+
+  assert.equal(canceled, false);
+  assert.equal(submitted, false);
+});
+
+test("sells restore canceled protection when the session closes before submission", async () => {
+  const calls: string[] = [];
+  let statusChecks = 0;
+  const broker = makeBroker({
+    cancelOrder: async (orderId) => {
+      calls.push(`cancel:${orderId}`);
+    },
+    submitOrder: async () => {
+      calls.push("submit-sell");
+      return makeOrder();
+    },
+    submitProtectionOrders: async (request) => {
+      calls.push("restore-protection");
+      assert.deepEqual(request, {
+        instrument,
+        quantity: 100,
+        recordId: 42,
+        stopLoss: 95,
+        takeProfit: 110,
+      });
+      return { stopLossOrderId: "sl-restored", takeProfitOrderId: "tp-restored" };
+    },
+  });
+  const marketData = makeMarketData({
+    getTradingStatus: async () => {
+      statusChecks += 1;
+      calls.push(`status:${statusChecks}`);
+      return statusChecks === 1
+        ? { isTrading: true, reason: "trading" }
+        : { isTrading: false, reason: "outside-trading-session" };
+    },
+  });
+
+  await executeAction(makeConfig(broker, marketData), {
+    action: "SELL_FULL",
+    instrument,
+    symbol: "AAPL",
+    record: { ...makeRecord(), operation_advice: "卖出" },
+    holding: {
+      instrument,
+      symbol: "AAPL",
+      quantity: 100,
+      availableQuantity: 100,
+      costPrice: 90,
+    },
+    existingSlOrder: {
+      orderId: "sl-1",
+      symbol: "AAPL",
+      side: "Sell",
+      orderType: "market-if-touched",
+      price: "0",
+      triggerPrice: "95",
+      quantity: "100",
+      status: "pending",
+      role: "stop_loss",
+      remark: "auto-trade:sl:42",
+    },
+    existingTpOrder: {
+      orderId: "tp-1",
+      symbol: "AAPL",
+      side: "Sell",
+      orderType: "limit-if-touched",
+      price: "110",
+      triggerPrice: "110",
+      quantity: "100",
+      status: "pending",
+      role: "take_profit",
+      remark: "auto-trade:tp:42",
+    },
+  });
+
+  assert.equal(statusChecks, 2);
+  assert.deepEqual(calls, [
+    "status:1",
+    "cancel:sl-1",
+    "cancel:tp-1",
+    "status:2",
+    "restore-protection",
+  ]);
+});
+
+test("closed markets skip replacing pending entry orders", async () => {
+  let replaced = false;
+  const broker = makeBroker({
+    replaceOrder: async () => {
+      replaced = true;
+      return makeOrder();
+    },
+  });
+
+  await executeAction(
+    makeConfig(
+      broker,
+      makeMarketData({
+        getTradingStatus: async () => ({
+          isTrading: false,
+          reason: "outside-trading-session",
+        }),
+      }),
+    ),
+    {
+      action: "UPDATE_BUY",
+      instrument,
+      symbol: "AAPL",
+      record: makeRecord(),
+      pendingBuyOrder: {
+        orderId: "buy-1",
+        symbol: "AAPL",
+        side: "Buy",
+        orderType: "limit",
+        price: "101",
+        triggerPrice: "0",
+        quantity: "9",
+        status: "pending",
+        role: "buy",
+        remark: "auto-trade:buy:41",
+      },
+    },
+  );
+
+  assert.equal(replaced, false);
+});
+
+test("protection recovery remains available outside trading sessions", async () => {
+  let checkedStatus = false;
+  let submittedProtection = false;
+  const broker = makeBroker({
+    submitProtectionOrders: async () => {
+      submittedProtection = true;
+      return { stopLossOrderId: "sl-1" };
+    },
+  });
+
+  await executeAction(
+    makeConfig(
+      broker,
+      makeMarketData({
+        getTradingStatus: async () => {
+          checkedStatus = true;
+          return { isTrading: false, reason: "outside-trading-session" };
+        },
+      }),
+    ),
+    {
+      action: "RECOVER_SL_TP",
+      instrument,
+      symbol: "AAPL",
+      record: makeRecord(),
+      holding: {
+        instrument,
+        symbol: "AAPL",
+        quantity: 100,
+        availableQuantity: 100,
+        costPrice: 90,
+      },
+    },
+  );
+
+  assert.equal(checkedStatus, false);
+  assert.equal(submittedProtection, true);
 });

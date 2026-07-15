@@ -38,6 +38,18 @@ export interface InstrumentInfo {
   lotSize: number;
 }
 
+export type TradingStatusReason =
+  | "trading"
+  | "non-trading-day"
+  | "outside-trading-session"
+  | "instrument-unavailable";
+
+/** Provider-neutral snapshot used to fail closed before submitting an entry/exit order. */
+export interface TradingStatus {
+  isTrading: boolean;
+  reason: TradingStatusReason;
+}
+
 export interface AccountBalance {
   currency: Currency;
   buyingPower: number;

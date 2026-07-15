@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Market, TradeStatus } from "longbridge";
 import { LongbridgeMarketDataProvider } from "./market-data.js";
 import { fromLongbridgeSymbol, toLongbridgeSymbol } from "./symbols.js";
 
 function decimal(value: string): { toString(): string } {
   return { toString: () => value };
+}
+
+function time(hour: number, minute: number) {
+  return { hour, minute };
+}
+
+function tradingDay(year: number, month: number, day: number) {
+  return { year, month, day };
 }
 
 test("maps provider-neutral instruments to and from Longbridge symbols", () => {
@@ -106,4 +115,134 @@ test("maps instrument lot sizes and avoids SDK calls for empty batches", async (
     { instrument: { symbol: "00700", market: "HK" }, lotSize: 100 },
   ]);
   assert.equal(calls, 1);
+});
+
+test("reports a weekend without querying sessions or security status", async () => {
+  const calls: string[] = [];
+  const quoteContext = {
+    tradingDays: async (
+      market: Market,
+      begin: { toString(): string },
+      end: { toString(): string },
+    ) => {
+      calls.push("trading-days");
+      assert.equal(market, Market.HK);
+      assert.equal(begin.toString(), "2026-07-18");
+      assert.equal(end.toString(), "2026-07-18");
+      return { tradingDays: [] };
+    },
+    tradingSession: async () => {
+      calls.push("trading-session");
+      return [];
+    },
+    quote: async () => {
+      calls.push("quote");
+      return [];
+    },
+  };
+  const provider = new LongbridgeMarketDataProvider(
+    quoteContext as never,
+    () => new Date("2026-07-18T02:00:00Z"),
+  );
+
+  assert.deepEqual(await provider.getTradingStatus({ symbol: "00700", market: "HK" }), {
+    isTrading: false,
+    reason: "non-trading-day",
+  });
+  assert.deepEqual(calls, ["trading-days"]);
+});
+
+test("reports Hong Kong lunch break and after-hours as outside trading sessions", async () => {
+  const makeProvider = (now: string) =>
+    new LongbridgeMarketDataProvider(
+      {
+        tradingDays: async () => ({ tradingDays: [tradingDay(2026, 7, 15)] }),
+        tradingSession: async () => [
+          {
+            market: Market.HK,
+            tradeSessions: [
+              { beginTime: time(9, 30), endTime: time(12, 0) },
+              { beginTime: time(13, 0), endTime: time(16, 0) },
+            ],
+          },
+        ],
+        quote: async () => {
+          throw new Error("outside sessions must not query a quote");
+        },
+      } as never,
+      () => new Date(now),
+    );
+
+  assert.deepEqual(
+    await makeProvider("2026-07-15T04:30:00Z").getTradingStatus({
+      symbol: "00700",
+      market: "HK",
+    }),
+    { isTrading: false, reason: "outside-trading-session" },
+  );
+  assert.deepEqual(
+    await makeProvider("2026-07-15T09:00:00Z").getTradingStatus({
+      symbol: "00700",
+      market: "HK",
+    }),
+    { isTrading: false, reason: "outside-trading-session" },
+  );
+});
+
+test("reports an open session only when the security is tradable", async () => {
+  const calls: string[] = [];
+  const quoteContext = {
+    tradingDays: async () => {
+      calls.push("trading-days");
+      return { tradingDays: [tradingDay(2026, 7, 15)] };
+    },
+    tradingSession: async () => {
+      calls.push("trading-session");
+      return [
+        {
+          market: Market.HK,
+          tradeSessions: [{ beginTime: time(9, 30), endTime: time(12, 0) }],
+        },
+      ];
+    },
+    quote: async (symbols: string[]) => {
+      calls.push("quote");
+      assert.deepEqual(symbols, ["00700.HK"]);
+      return [{ tradeStatus: TradeStatus.Normal }];
+    },
+  };
+  const provider = new LongbridgeMarketDataProvider(
+    quoteContext as never,
+    () => new Date("2026-07-15T02:00:00Z"),
+  );
+
+  assert.deepEqual(await provider.getTradingStatus({ symbol: "00700", market: "HK" }), {
+    isTrading: true,
+    reason: "trading",
+  });
+  assert.deepEqual(calls, ["trading-days", "trading-session", "quote"]);
+});
+
+test("uses market-local time with US daylight saving time", async () => {
+  const provider = new LongbridgeMarketDataProvider(
+    {
+      tradingDays: async (_market: Market, begin: { year: number; month: number; day: number }) => {
+        assert.deepEqual([begin.year, begin.month, begin.day], [2026, 7, 15]);
+        return { tradingDays: [tradingDay(2026, 7, 15)] };
+      },
+      tradingSession: async () => [
+        {
+          market: Market.US,
+          tradeSessions: [{ beginTime: time(9, 30), endTime: time(16, 0) }],
+        },
+      ],
+      quote: async () => [{ tradeStatus: TradeStatus.Normal }],
+    } as never,
+    () => new Date("2026-07-15T13:45:00Z"),
+  );
+
+  assert.deepEqual(await provider.getTradingStatus({ symbol: "AAPL", market: "US" }), {
+    isTrading: true,
+    reason: "trading",
+  });
 });

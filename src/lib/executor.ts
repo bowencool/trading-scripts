@@ -37,6 +37,28 @@ function getCurrency(instrument: Instrument): Currency {
   return currencies[instrument.market];
 }
 
+async function ensureTradingNow(
+  marketData: MarketDataProvider,
+  instrument: Instrument,
+  symbol: string,
+): Promise<boolean> {
+  try {
+    const status = await marketData.getTradingStatus(instrument);
+    if (status.isTrading) return true;
+
+    const reasons = {
+      "non-trading-day": "今天是周末或休市日",
+      "outside-trading-session": "当前不在交易时段",
+      "instrument-unavailable": "证券当前停牌或不可交易",
+      trading: "",
+    };
+    console.log(`[SKIP] ${symbol} - ${reasons[status.reason]}`);
+  } catch (error) {
+    console.error(`[SKIP] ${symbol} - 无法确认当前交易状态，为避免误下单已跳过: ${error}`);
+  }
+  return false;
+}
+
 /**
  * Get the best available price for a symbol.
  * For buy side: prefer ask1 (卖一价) → pre/post/overnight → lastDone.
@@ -117,6 +139,8 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
   const targetPrice = record.ideal_buy!;
 
   printAnalysisRecord(record);
+
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
 
   const currency = getCurrency(instrument);
 
@@ -218,6 +242,9 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
     remark: `auto-trade:buy:${record.id}`,
   };
 
+  // Re-check immediately before submission in case an interactive confirmation crossed a boundary.
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+
   let buyDetail: BrokerOrder;
   if (isAddPosition) {
     const submitted = await broker.submitOrder(entryRequest);
@@ -272,8 +299,8 @@ async function executeBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> 
 }
 
 async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<void> {
-  const { broker, autoApprove, priceThresholdPct } = cfg;
-  const { symbol, record, pendingBuyOrder } = plan;
+  const { broker, marketData, autoApprove, priceThresholdPct } = cfg;
+  const { instrument, symbol, record, pendingBuyOrder } = plan;
   // biome-ignore lint/style/noNonNullAssertion: buy signals always have ideal_buy
   const targetPrice = record.ideal_buy!;
 
@@ -283,6 +310,8 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
   }
 
   printAnalysisRecord(record);
+
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
 
   const threshold = computeBuyLimitPrice(targetPrice, priceThresholdPct);
   const pendingPrice = Number(pendingBuyOrder.price);
@@ -301,6 +330,8 @@ async function executeUpdateBuy(cfg: ExecutorConfig, plan: ActionPlan): Promise<
       return;
     }
   }
+
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
 
   try {
     await broker.replaceOrder({
@@ -367,6 +398,8 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   printAnalysisRecord(record);
 
   const isPartial = action === "SELL_PARTIAL";
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) return;
+
   const sellPct = plan.sellPct ?? cfgSellPct;
 
   // Get lot size
@@ -449,6 +482,13 @@ async function executeSell(cfg: ExecutorConfig, plan: ActionPlan): Promise<void>
   }
 
   const remark = isPartial ? `auto-trade:reduce:${record.id}` : `auto-trade:sell:${record.id}`;
+
+  if (!(await ensureTradingNow(marketData, instrument, symbol))) {
+    if (cancelledOrderIds.length > 0) {
+      await rollbackSlTp(cfg, instrument, record, holding.quantity);
+    }
+    return;
+  }
 
   try {
     const resp = await broker.submitOrder({
