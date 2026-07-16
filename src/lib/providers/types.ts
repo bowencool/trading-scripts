@@ -18,7 +18,6 @@ export interface MarketQuote {
   lastPrice: number;
   preMarket?: SessionPrice;
   postMarket?: SessionPrice;
-  overnight?: SessionPrice;
   timestamp?: Date;
 }
 

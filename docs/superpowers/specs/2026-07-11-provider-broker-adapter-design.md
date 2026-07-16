@@ -18,7 +18,7 @@ flowchart TD
 ## 接口与领域类型
 
 - `Instrument` 使用无供应商后缀的规范化 symbol 和显式 market，例如 `{ symbol: "AAPL", market: "US" }`；供应商实现负责外部 symbol 转换。
-- `MarketDataProvider` 提供批量报价、盘口和证券静态信息。业务层按盘口、盘前/盘后/夜盘报价、最新价的顺序取价。
+- `MarketDataProvider` 提供批量报价、盘口和证券静态信息。业务层按盘口、盘前/盘后报价、最新价的顺序取价。
 - `BrokerAdapter` 提供账户、持仓、订单查询、基础订单生命周期及 bracket/保护单高阶操作。
 - 金额、价格和数量使用 `number`；订单状态统一为 pending、partially-filled、filled、canceled、rejected、expired、unknown。
 - 无法映射的供应商状态标记为 unknown；供应商原始异常可以作为 cause 保留。

@@ -36,7 +36,7 @@ test("rejects already suffixed and ambiguous CN symbols", () => {
   );
 });
 
-test("maps quotes including extended trading sessions", async () => {
+test("maps quotes including pre/post trading sessions", async () => {
   const timestamp = new Date("2026-07-11T12:00:00Z");
   const preTimestamp = new Date("2026-07-11T08:00:00Z");
   const quoteContext = {
@@ -48,7 +48,6 @@ test("maps quotes including extended trading sessions", async () => {
           lastDone: decimal("211.25"),
           preMarketQuote: { lastDone: decimal("210.5"), timestamp: preTimestamp },
           postMarketQuote: null,
-          overnightQuote: { lastDone: decimal("209.75"), timestamp },
           timestamp,
         },
       ];
@@ -62,7 +61,6 @@ test("maps quotes including extended trading sessions", async () => {
       lastPrice: 211.25,
       preMarket: { price: 210.5, timestamp: preTimestamp },
       postMarket: undefined,
-      overnight: { price: 209.75, timestamp },
       timestamp,
     },
   ]);
@@ -374,54 +372,34 @@ test("maps Longbridge pre-market and post-market sessions to provider-neutral se
   }
 });
 
-test("fails closed for Longbridge overnight and unknown sessions", async () => {
-  const scenarios = [
+test("fails closed for unknown Longbridge sessions", async () => {
+  let quoteCalls = 0;
+  const provider = new LongbridgeMarketDataProvider(
     {
-      name: "overnight",
-      now: "2026-07-16T01:00:00Z",
-      begin: time(20, 0),
-      end: time(4, 0),
-      session: TradeSession.Overnight,
-    },
-    {
-      name: "unknown",
-      now: "2026-07-15T14:00:00Z",
-      begin: time(9, 30),
-      end: time(16, 0),
-      session: 99 as TradeSession,
-    },
-  ] as const;
-
-  for (const scenario of scenarios) {
-    let quoteCalls = 0;
-    const provider = new LongbridgeMarketDataProvider(
-      {
-        tradingDays: async () => ({ tradingDays: [tradingDay(2026, 7, 15)] }),
-        tradingSession: async () => [
-          {
-            market: Market.US,
-            tradeSessions: [
-              {
-                beginTime: scenario.begin,
-                endTime: scenario.end,
-                tradeSession: scenario.session,
-              },
-            ],
-          },
-        ],
-        quote: async () => {
-          quoteCalls += 1;
-          return [{ tradeStatus: TradeStatus.Normal }];
+      tradingDays: async () => ({ tradingDays: [tradingDay(2026, 7, 15)] }),
+      tradingSession: async () => [
+        {
+          market: Market.US,
+          tradeSessions: [
+            {
+              beginTime: time(9, 30),
+              endTime: time(16, 0),
+              tradeSession: 99 as TradeSession,
+            },
+          ],
         },
-      } as never,
-      () => new Date(scenario.now),
-    );
+      ],
+      quote: async () => {
+        quoteCalls += 1;
+        return [{ tradeStatus: TradeStatus.Normal }];
+      },
+    } as never,
+    () => new Date("2026-07-15T14:00:00Z"),
+  );
 
-    assert.deepEqual(
-      await provider.getTradingStatus({ symbol: "AAPL", market: "US" }),
-      { isTrading: false, reason: "outside-trading-session" },
-      scenario.name,
-    );
-    assert.equal(quoteCalls, 0, scenario.name);
-  }
+  assert.deepEqual(await provider.getTradingStatus({ symbol: "AAPL", market: "US" }), {
+    isTrading: false,
+    reason: "outside-trading-session",
+  });
+  assert.equal(quoteCalls, 0);
 });

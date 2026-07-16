@@ -509,8 +509,7 @@ function mapLongbridgeOrderWithInstrument(
     ...(order.price == null ? {} : { price: Number(order.price.toString()) }),
     ...(order.triggerPrice == null ? {} : { triggerPrice: Number(order.triggerPrice.toString()) }),
     timeInForce: fromLongbridgeTimeInForce(order.timeInForce),
-    outsideRegularHours:
-      order.outsideRth === OutsideRTH.AnyTime || order.outsideRth === OutsideRTH.Overnight,
+    outsideRegularHours: order.outsideRth === OutsideRTH.AnyTime,
     remark: order.remark ?? "",
     role: toOrderRole(order.remark ?? ""),
     submittedAt: order.submittedAt,

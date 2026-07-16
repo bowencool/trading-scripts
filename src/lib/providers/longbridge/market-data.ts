@@ -88,15 +88,9 @@ export class LongbridgeMarketDataProvider implements MarketDataProvider {
     const activeSession = sessions.find((session) => {
       const begin = session.beginTime.hour * 3600 + session.beginTime.minute * 60;
       const end = session.endTime.hour * 3600 + session.endTime.minute * 60;
-      return begin <= end
-        ? currentSecond >= begin && currentSecond < end
-        : currentSecond >= begin || currentSecond < end;
+      return currentSecond >= begin && currentSecond < end;
     });
     if (!activeSession) return { isTrading: false, reason: "outside-trading-session" };
-
-    const beginSecond = activeSession.beginTime.hour * 3600 + activeSession.beginTime.minute * 60;
-    const endSecond = activeSession.endTime.hour * 3600 + activeSession.endTime.minute * 60;
-    if (beginSecond > endSecond) return { isTrading: false, reason: "outside-trading-session" };
 
     const session = fromLongbridgeTradeSession(activeSession.tradeSession);
     if (!session) return { isTrading: false, reason: "outside-trading-session" };
@@ -117,7 +111,6 @@ export class LongbridgeMarketDataProvider implements MarketDataProvider {
       lastPrice: decimalToNumber(quote.lastDone),
       preMarket: mapSessionPrice(quote.preMarketQuote),
       postMarket: mapSessionPrice(quote.postMarketQuote),
-      overnight: mapSessionPrice(quote.overnightQuote),
       timestamp: quote.timestamp,
     }));
   }

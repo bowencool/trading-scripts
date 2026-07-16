@@ -116,7 +116,7 @@ test("getRemainingPositionQuantity never returns a negative position", () => {
   assert.equal(getRemainingPositionQuantity(100, 120), 0);
 });
 
-test("getEffectivePrice prefers order book and falls back through extended sessions", async () => {
+test("getEffectivePrice prefers order book and falls back through pre/post sessions", async () => {
   assert.deepEqual(await getEffectivePrice(makeMarketData(), instrument, "buy"), {
     price: 100,
     source: "卖一",
@@ -132,7 +132,6 @@ test("getEffectivePrice prefers order book and falls back through extended sessi
         lastPrice: 98,
         preMarket: { price: 0 },
         postMarket: { price: 101 },
-        overnight: { price: 99 },
       },
     ],
   });
@@ -354,7 +353,7 @@ test("unsupported provider sessions fail closed before a buy", async () => {
         getTradingStatus: async () => ({
           isTrading: true,
           reason: "trading",
-          session: "overnight" as never,
+          session: "unsupported" as never,
         }),
       }),
     ),
@@ -546,7 +545,7 @@ test("unsupported provider sessions fail closed before a sell", async () => {
     getTradingStatus: async () => ({
       isTrading: true,
       reason: "trading",
-      session: "overnight" as never,
+      session: "unsupported" as never,
     }),
   });
 
@@ -625,7 +624,7 @@ test("unsupported provider sessions skip replacing an order", async () => {
         getTradingStatus: async () => ({
           isTrading: true,
           reason: "trading",
-          session: "overnight" as never,
+          session: "unsupported" as never,
         }),
       }),
     ),
