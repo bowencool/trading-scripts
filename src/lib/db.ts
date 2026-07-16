@@ -2,12 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { AnalysisAction, AnalysisRecord } from "./types.js";
 
 const BASE_COLUMNS = `id, code, name, report_type, sentiment_score,
-  operation_advice, trend_prediction, analysis_summary,
-  ideal_buy, secondary_buy, stop_loss, take_profit, created_at`;
-
-const TREND_BUY = new Set(["看多", "强烈看多"]);
-const TREND_SELL = new Set(["看空", "强烈看空"]);
-const TREND_OVERRIDABLE_ADVICE = new Set(["", "持有", "观望"]);
+  analysis_summary, ideal_buy, secondary_buy, stop_loss, take_profit, created_at`;
 const STRUCTURED_ACTIONS = new Set<AnalysisAction>([
   "buy",
   "add",
@@ -111,27 +106,10 @@ function parseStructuredAction(rawResult: string | null): AnalysisAction | null 
   }
 }
 
-function parseLegacyAction(record: RawAnalysisRecord): AnalysisAction | null {
-  const advice = record.operation_advice ?? "";
-  const trend = record.trend_prediction ?? "";
-
-  if (advice === "买入") return "buy";
-  if (advice === "加仓") return "add";
-  if (advice === "减仓") return "reduce";
-  if (advice === "卖出") return "sell";
-  if (TREND_OVERRIDABLE_ADVICE.has(advice)) {
-    if (TREND_BUY.has(trend)) return "buy";
-    if (TREND_SELL.has(trend)) return "sell";
-  }
-  if (advice === "持有") return "hold";
-  if (advice === "观望") return "watch";
-  return null;
-}
-
 function normalizeRecord(record: RawAnalysisRecord): AnalysisRecord {
   return {
     ...record,
-    action: parseStructuredAction(record.raw_result) ?? parseLegacyAction(record),
+    action: parseStructuredAction(record.raw_result),
   };
 }
 

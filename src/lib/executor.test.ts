@@ -27,8 +27,6 @@ function makeRecord(): AnalysisRecord {
     report_type: "agent",
     sentiment_score: 80,
     action: "buy",
-    operation_advice: "买入",
-    trend_prediction: "看多",
     analysis_summary: null,
     raw_result: null,
     news_content: null,
@@ -258,7 +256,7 @@ test("add-position buys wait for the entry and sync protection to total quantity
     action: "ADD_POSITION",
     instrument,
     symbol: "AAPL",
-    record: { ...makeRecord(), action: "add", operation_advice: "加仓" },
+    record: { ...makeRecord(), action: "add" },
     holding: {
       instrument,
       symbol: "AAPL",
@@ -425,7 +423,7 @@ test("closed markets skip sells before canceling protection orders", async () =>
       action: "SELL_FULL",
       instrument,
       symbol: "AAPL",
-      record: { ...makeRecord(), operation_advice: "卖出" },
+      record: { ...makeRecord(), action: "sell" },
       holding: {
         instrument,
         symbol: "AAPL",
@@ -489,7 +487,7 @@ test("sells restore canceled protection when the session closes before submissio
     action: "SELL_FULL",
     instrument,
     symbol: "AAPL",
-    record: { ...makeRecord(), operation_advice: "卖出" },
+    record: { ...makeRecord(), action: "sell" },
     holding: {
       instrument,
       symbol: "AAPL",
@@ -553,7 +551,7 @@ test("unsupported provider sessions fail closed before a sell", async () => {
     action: "SELL_FULL",
     instrument,
     symbol: "AAPL",
-    record: { ...makeRecord(), operation_advice: "卖出" },
+    record: { ...makeRecord(), action: "sell" },
     holding: {
       instrument,
       symbol: "AAPL",

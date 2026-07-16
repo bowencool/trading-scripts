@@ -83,11 +83,11 @@ function printActionPlan(title: string, plans: ActionPlan[]): void {
     console.log(`    记录 #${record.id} · ${record.created_at}`);
 
     // Line 2: signal summary
-    const parts: string[] = [];
-    if (record.sentiment_score != null) parts.push(colors.cyan(record.sentiment_score));
-    if (record.operation_advice) parts.push(record.operation_advice);
-    if (record.trend_prediction) parts.push(record.trend_prediction);
-    if (parts.length > 0) console.log(`    评分 ${parts.join(" · ")}`);
+    const signalParts = [`action ${record.action ?? "-"}`];
+    if (record.sentiment_score != null) {
+      signalParts.push(`评分 ${colors.cyan(record.sentiment_score)}`);
+    }
+    console.log(`    信号 ${signalParts.join(" · ")}`);
 
     // Line 3: prices
     const prices: string[] = [];

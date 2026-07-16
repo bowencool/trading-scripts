@@ -132,11 +132,11 @@ export async function getEffectivePrice(
 function printAnalysisRecord(record: AnalysisRecord): void {
   console.log(`\n🔹 [${record.code}] ${record.name ?? "未知"} (${record.report_type ?? "-"})`);
 
-  const parts: string[] = [];
-  if (record.sentiment_score != null) parts.push(colors.cyan(record.sentiment_score));
-  if (record.operation_advice) parts.push(record.operation_advice);
-  if (record.trend_prediction) parts.push(record.trend_prediction);
-  if (parts.length > 0) console.log(`   评分 ${parts.join(" · ")}`);
+  const signalParts = [`action ${record.action ?? "-"}`];
+  if (record.sentiment_score != null) {
+    signalParts.push(`评分 ${colors.cyan(record.sentiment_score)}`);
+  }
+  console.log(`   信号 ${signalParts.join(" · ")}`);
 
   const prices: string[] = [];
   if (record.ideal_buy != null) prices.push(`理想 ${colors.yellow(record.ideal_buy)}`);
@@ -402,7 +402,7 @@ async function executeCancelConflictingOrders(
 
   printAnalysisRecord(plan.record);
 
-  console.log(`\n📋 取消冲突挂单 ${plan.symbol}（信号: ${plan.record.operation_advice ?? "-"}）`);
+  console.log(`\n📋 取消冲突挂单 ${plan.symbol}（action: ${plan.record.action ?? "-"}）`);
   console.log(`   记录 #${plan.record.id} · ${plan.record.created_at}`);
   for (const order of ordersToCancel) {
     console.log(`   ${order.orderId} ${order.role} @ ${order.price} × ${order.quantity}`);

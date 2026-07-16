@@ -12,8 +12,6 @@ function makeRecord(overrides: Partial<AnalysisRecord> = {}): AnalysisRecord {
     report_type: "agent",
     sentiment_score: 80,
     action: "sell",
-    operation_advice: "卖出",
-    trend_prediction: "看空",
     analysis_summary: null,
     raw_result: null,
     news_content: null,
@@ -102,13 +100,7 @@ test("buildActionPlan does not update a pending buy when the threshold price alr
     orphanWarnings: [],
   };
 
-  const plans = buildActionPlan(
-    portfolio,
-    [makeRecord({ action: "buy", operation_advice: "买入", trend_prediction: "看多" })],
-    [],
-    new Map(),
-    2,
-  );
+  const plans = buildActionPlan(portfolio, [makeRecord({ action: "buy" })], [], new Map(), 2);
 
   assert.equal(plans.length, 0);
 });
@@ -126,8 +118,6 @@ test("buildActionPlan skips a completed buy signal when its record id already hi
       makeRecord({
         id: 88,
         action: "buy",
-        operation_advice: "买入",
-        trend_prediction: "看多",
       }),
     ],
     [],
@@ -152,8 +142,6 @@ test("buildActionPlan still buys when only an older record id was completed", ()
       makeRecord({
         id: 99,
         action: "buy",
-        operation_advice: "买入",
-        trend_prediction: "看多",
       }),
     ],
     [],
@@ -195,12 +183,7 @@ test("buildActionPlan creates add-position action for held symbols with add sign
     orphanWarnings: [],
   };
 
-  const plans = buildActionPlan(
-    portfolio,
-    [makeRecord({ action: "add", operation_advice: "观望", trend_prediction: "震荡" })],
-    [],
-    new Map(),
-  );
+  const plans = buildActionPlan(portfolio, [makeRecord({ action: "add" })], [], new Map());
 
   assert.equal(plans.length, 1);
   assert.equal(plans[0]?.action, "ADD_POSITION");
@@ -227,12 +210,7 @@ test("buildActionPlan creates partial sell from reduce action without Chinese ad
     orphanWarnings: [],
   };
 
-  const plans = buildActionPlan(
-    portfolio,
-    [],
-    [makeRecord({ action: "reduce", operation_advice: "观望", trend_prediction: "震荡" })],
-    new Map(),
-  );
+  const plans = buildActionPlan(portfolio, [], [makeRecord({ action: "reduce" })], new Map());
 
   assert.equal(plans.length, 1);
   assert.equal(plans[0]?.action, "SELL_PARTIAL");
@@ -263,8 +241,6 @@ test("buildActionPlan skips new positions when max holdings is reached", () => {
       makeRecord({
         code: "MSFT",
         action: "buy",
-        operation_advice: "买入",
-        trend_prediction: "看多",
       }),
     ],
     [],
@@ -298,12 +274,7 @@ test("buildPreflightPlan cancels a stale pending buy when the latest signal turn
     orphanWarnings: [],
   };
 
-  const plans = buildPreflightPlan(
-    portfolio,
-    [],
-    [makeRecord({ operation_advice: "卖出" })],
-    new Map(),
-  );
+  const plans = buildPreflightPlan(portfolio, [], [makeRecord({ action: "sell" })], new Map());
 
   assert.equal(plans.length, 1);
   assert.equal(plans[0]?.action, "CANCEL_CONFLICTING_ORDERS");
@@ -341,12 +312,7 @@ test("buildPreflightPlan cancels a stale pending sell when the latest signal tur
     orphanWarnings: [],
   };
 
-  const plans = buildPreflightPlan(
-    portfolio,
-    [makeRecord({ action: "buy", operation_advice: "买入", trend_prediction: "看多" })],
-    [],
-    new Map(),
-  );
+  const plans = buildPreflightPlan(portfolio, [makeRecord({ action: "buy" })], [], new Map());
 
   assert.equal(plans.length, 1);
   assert.equal(plans[0]?.action, "CANCEL_CONFLICTING_ORDERS");

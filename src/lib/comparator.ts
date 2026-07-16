@@ -504,7 +504,7 @@ function buildConflictingPendingOrderPlans(
 
   for (const [symbol, { instrument, record, orders }] of grouped) {
     console.log(
-      `[CANCEL] ${symbol} 最新信号为 ${record.operation_advice ?? "-"}，取消冲突挂单 ${orders.map((order) => order.orderId).join(", ")}`,
+      `[CANCEL] ${symbol} 最新 action 为 ${record.action ?? "-"}，取消冲突挂单 ${orders.map((order) => order.orderId).join(", ")}`,
     );
     plans.push({
       action: "CANCEL_CONFLICTING_ORDERS",
@@ -532,8 +532,6 @@ function makeDummyRecord(symbol: string): AnalysisRecord {
     report_type: null,
     sentiment_score: null,
     action: "hold",
-    operation_advice: "持有",
-    trend_prediction: null,
     analysis_summary: null,
     raw_result: null,
     news_content: null,

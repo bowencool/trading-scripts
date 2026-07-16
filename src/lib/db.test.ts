@@ -4,13 +4,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { queryAll } from "./db.js";
-import type { AnalysisRecord } from "./types.js";
+import { queryAll, queryRecordById, querySlTpRecord } from "./db.js";
 
-function withTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
+interface TestRecord {
+  id: number;
+  code: string;
+  name: string | null;
+  report_type: string | null;
+  sentiment_score: number | null;
+  analysis_summary: string | null;
+  raw_result: string | null;
+  ideal_buy: number | null;
+  secondary_buy: number | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  created_at: string;
+}
+
+function withTempDb(
+  fn: (dbPath: string, db: DatabaseSync) => void,
+  options: { rawResultColumn?: boolean } = {},
+): void {
   const dir = mkdtempSync(join(tmpdir(), "trading-scripts-db-"));
   const dbPath = join(dir, "stock_analysis.db");
   const db = new DatabaseSync(dbPath);
+  const rawResultColumn = options.rawResultColumn === false ? "" : "raw_result TEXT,";
 
   try {
     db.exec(`
@@ -20,10 +38,8 @@ function withTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
         name TEXT,
         report_type TEXT,
         sentiment_score INTEGER,
-        operation_advice TEXT,
-        trend_prediction TEXT,
         analysis_summary TEXT,
-        raw_result TEXT,
+        ${rawResultColumn}
         ideal_buy REAL,
         secondary_buy REAL,
         stop_loss REAL,
@@ -38,182 +54,140 @@ function withTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
   }
 }
 
-function withLegacyTempDb(fn: (dbPath: string, db: DatabaseSync) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "trading-scripts-db-"));
-  const dbPath = join(dir, "stock_analysis.db");
-  const db = new DatabaseSync(dbPath);
-
-  try {
-    db.exec(`
-      CREATE TABLE analysis_history (
-        id INTEGER PRIMARY KEY,
-        code TEXT NOT NULL,
-        name TEXT,
-        report_type TEXT,
-        sentiment_score INTEGER,
-        operation_advice TEXT,
-        trend_prediction TEXT,
-        analysis_summary TEXT,
-        ideal_buy REAL,
-        secondary_buy REAL,
-        stop_loss REAL,
-        take_profit REAL,
-        created_at TEXT NOT NULL
-      )
-    `);
-    fn(dbPath, db);
-  } finally {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-function insertRecord(db: DatabaseSync, overrides: Partial<AnalysisRecord> = {}): void {
-  const record: AnalysisRecord = {
+function insertRecord(
+  db: DatabaseSync,
+  overrides: Partial<TestRecord> = {},
+  options: { rawResultColumn?: boolean } = {},
+): void {
+  const record: TestRecord = {
     id: 1,
-    query_id: null,
     code: "AAPL",
     name: "Apple",
     report_type: "agent",
     sentiment_score: 65,
-    action: null,
-    operation_advice: "观望",
-    trend_prediction: "震荡",
     analysis_summary: null,
     raw_result: null,
-    news_content: null,
-    context_snapshot: null,
     ideal_buy: 100,
     secondary_buy: null,
     stop_loss: 95,
     take_profit: 110,
-    created_at: "datetime('now')",
+    created_at: new Date().toISOString(),
     ...overrides,
   };
 
+  if (options.rawResultColumn === false) {
+    db.prepare(`
+      INSERT INTO analysis_history (
+        id, code, name, report_type, sentiment_score, analysis_summary,
+        ideal_buy, secondary_buy, stop_loss, take_profit, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.code,
+      record.name,
+      record.report_type,
+      record.sentiment_score,
+      record.analysis_summary,
+      record.ideal_buy,
+      record.secondary_buy,
+      record.stop_loss,
+      record.take_profit,
+      record.created_at,
+    );
+    return;
+  }
+
   db.prepare(`
     INSERT INTO analysis_history (
-      id, code, name, report_type, sentiment_score, operation_advice,
-      trend_prediction, analysis_summary, raw_result, ideal_buy, secondary_buy,
-      stop_loss, take_profit, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      id, code, name, report_type, sentiment_score, analysis_summary,
+      raw_result, ideal_buy, secondary_buy, stop_loss, take_profit, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     record.id,
     record.code,
     record.name,
     record.report_type,
     record.sentiment_score,
-    record.operation_advice,
-    record.trend_prediction,
     record.analysis_summary,
     record.raw_result,
     record.ideal_buy,
     record.secondary_buy,
     record.stop_loss,
     record.take_profit,
+    record.created_at,
   );
 }
 
-function insertLegacyRecord(db: DatabaseSync, overrides: Partial<AnalysisRecord> = {}): void {
-  const record: AnalysisRecord = {
-    id: 1,
-    query_id: null,
-    code: "AAPL",
-    name: "Apple",
-    report_type: "agent",
-    sentiment_score: 65,
-    action: null,
-    operation_advice: "观望",
-    trend_prediction: "震荡",
-    analysis_summary: null,
-    raw_result: null,
-    news_content: null,
-    context_snapshot: null,
-    ideal_buy: 100,
-    secondary_buy: null,
-    stop_loss: 95,
-    take_profit: 110,
-    created_at: "datetime('now')",
-    ...overrides,
-  };
+const ACTION_CASES = [
+  { action: "buy", side: "buy" },
+  { action: "add", side: "buy" },
+  { action: "reduce", side: "sell" },
+  { action: "sell", side: "sell" },
+  { action: "hold", side: "neutral" },
+  { action: "watch", side: "neutral" },
+  { action: "avoid", side: "neutral" },
+  { action: "alert", side: "neutral" },
+] as const;
 
-  db.prepare(`
-    INSERT INTO analysis_history (
-      id, code, name, report_type, sentiment_score, operation_advice,
-      trend_prediction, analysis_summary, ideal_buy, secondary_buy,
-      stop_loss, take_profit, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
-    record.id,
-    record.code,
-    record.name,
-    record.report_type,
-    record.sentiment_score,
-    record.operation_advice,
-    record.trend_prediction,
-    record.analysis_summary,
-    record.ideal_buy,
-    record.secondary_buy,
-    record.stop_loss,
-    record.take_profit,
-  );
-}
+for (const { action, side } of ACTION_CASES) {
+  test(`queryAll classifies action ${action} as ${side}`, () => {
+    withTempDb((dbPath, db) => {
+      insertRecord(db, { raw_result: JSON.stringify({ action }) });
 
-test("queryAll keeps sell signals even when take_profit is missing", () => {
-  withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      sentiment_score: 35,
-      operation_advice: "卖出",
-      trend_prediction: "看空",
-      take_profit: null,
+      const result = queryAll(dbPath);
+
+      assert.equal(result.buySignals.length, side === "buy" ? 1 : 0);
+      assert.equal(result.sellSignals.length, side === "sell" ? 1 : 0);
+      assert.equal(result.recentReports.length, 1);
+      assert.equal(result.recentReports[0]?.action, action);
     });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.sellSignals.length, 1);
-    assert.equal(result.sellSignals[0]?.code, "AAPL");
-    assert.equal(result.sellSignals[0]?.take_profit, null);
-    assert.equal(result.sellSignals[0]?.action, "sell");
   });
-});
+}
 
-test("queryAll treats bullish trend on hold advice as buy signal", () => {
+test("queryAll normalizes action whitespace and casing", () => {
   withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      operation_advice: "持有",
-      trend_prediction: "看多",
-      ideal_buy: 100,
-    });
+    insertRecord(db, { raw_result: JSON.stringify({ action: "  BuY\n" }) });
 
     const result = queryAll(dbPath);
 
     assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.code, "AAPL");
     assert.equal(result.buySignals[0]?.action, "buy");
-    assert.equal(result.sellSignals.length, 0);
   });
 });
 
-test("queryAll treats strongly bearish trend on watch advice as sell signal", () => {
-  withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      operation_advice: "观望",
-      trend_prediction: "强烈看空",
+for (const { label, rawResult } of [
+  { label: "missing action", rawResult: JSON.stringify({}) },
+  { label: "invalid JSON", rawResult: "not json" },
+  { label: "non-string action", rawResult: JSON.stringify({ action: 1 }) },
+  { label: "unknown action", rawResult: JSON.stringify({ action: "strong_buy" }) },
+  { label: "nested action", rawResult: JSON.stringify({ result: { action: "buy" } }) },
+]) {
+  test(`queryAll produces no signal for ${label}`, () => {
+    withTempDb((dbPath, db) => {
+      insertRecord(db, { raw_result: rawResult });
+
+      const result = queryAll(dbPath);
+
+      assert.equal(result.buySignals.length, 0);
+      assert.equal(result.sellSignals.length, 0);
+      assert.equal(result.recentReports.length, 1);
+      assert.equal(result.recentReports[0]?.action, null);
     });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.buySignals.length, 0);
-    assert.equal(result.sellSignals.length, 1);
-    assert.equal(result.sellSignals[0]?.code, "AAPL");
   });
-});
+}
 
-test("queryAll skips bullish trend buy signal without ideal buy price", () => {
+test("queryAll requires ideal_buy for buy and add actions", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
-      operation_advice: "持有",
-      trend_prediction: "看多",
+      id: 1,
+      code: "AAPL",
+      raw_result: JSON.stringify({ action: "buy" }),
+      ideal_buy: null,
+    });
+    insertRecord(db, {
+      id: 2,
+      code: "MSFT",
+      raw_result: JSON.stringify({ action: "add" }),
       ideal_buy: null,
     });
 
@@ -221,125 +195,85 @@ test("queryAll skips bullish trend buy signal without ideal buy price", () => {
 
     assert.equal(result.buySignals.length, 0);
     assert.equal(result.sellSignals.length, 0);
+    assert.equal(result.recentReports.length, 2);
   });
 });
 
-test("queryAll keeps explicit operation advice ahead of trend prediction", () => {
+test("queryAll does not require take_profit for reduce and sell actions", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
-      operation_advice: "卖出",
-      trend_prediction: "看多",
-    });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.buySignals.length, 0);
-    assert.equal(result.sellSignals.length, 1);
-    assert.equal(result.sellSignals[0]?.operation_advice, "卖出");
-    assert.equal(result.sellSignals[0]?.action, "sell");
-  });
-});
-
-test("queryAll uses structured buy action ahead of neutral text", () => {
-  withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      operation_advice: "观望",
-      trend_prediction: "震荡",
-      sentiment_score: 60,
-      raw_result: JSON.stringify({ action: "buy" }),
-      ideal_buy: 100,
-    });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.code, "AAPL");
-    assert.equal(result.buySignals[0]?.action, "buy");
-    assert.equal(result.sellSignals.length, 0);
-  });
-});
-
-test("queryAll preserves structured add action without rewriting display advice", () => {
-  withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      operation_advice: "观望",
-      trend_prediction: "震荡",
-      raw_result: JSON.stringify({ action: "add" }),
-      ideal_buy: 100,
-    });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.action, "add");
-    assert.equal(result.buySignals[0]?.operation_advice, "观望");
-  });
-});
-
-test("queryAll preserves structured reduce action without rewriting display advice", () => {
-  withTempDb((dbPath, db) => {
-    insertRecord(db, {
-      operation_advice: "观望",
-      trend_prediction: "震荡",
+      id: 1,
+      code: "AAPL",
       raw_result: JSON.stringify({ action: "reduce" }),
+      take_profit: null,
+    });
+    insertRecord(db, {
+      id: 2,
+      code: "MSFT",
+      raw_result: JSON.stringify({ action: "sell" }),
+      take_profit: null,
     });
 
     const result = queryAll(dbPath);
 
-    assert.equal(result.sellSignals.length, 1);
-    assert.equal(result.sellSignals[0]?.action, "reduce");
-    assert.equal(result.sellSignals[0]?.operation_advice, "观望");
-    assert.equal(result.buySignals.length, 0);
+    assert.deepEqual(result.sellSignals.map((record) => record.action).sort(), ["reduce", "sell"]);
   });
 });
 
-test("queryAll lets structured watch action override bullish text", () => {
+test("queryAll does not fall back when the latest action is invalid", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
-      operation_advice: "持有",
-      trend_prediction: "看多",
-      sentiment_score: 72,
-      raw_result: JSON.stringify({ action: "watch" }),
-      ideal_buy: 100,
+      id: 1,
+      raw_result: JSON.stringify({ action: "buy" }),
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    insertRecord(db, {
+      id: 2,
+      raw_result: "not json",
+      created_at: new Date().toISOString(),
     });
 
     const result = queryAll(dbPath);
 
     assert.equal(result.buySignals.length, 0);
     assert.equal(result.sellSignals.length, 0);
+    assert.equal(result.recentReports.length, 1);
+    assert.equal(result.recentReports[0]?.id, 2);
+    assert.equal(result.recentReports[0]?.action, null);
   });
 });
 
-test("queryAll falls back to legacy text rules when structured action is invalid", () => {
+test("queries databases without raw_result as action-less reports", () => {
+  withTempDb(
+    (dbPath, db) => {
+      insertRecord(db, {}, { rawResultColumn: false });
+
+      const result = queryAll(dbPath);
+      const record = queryRecordById(dbPath, 1);
+
+      assert.equal(result.buySignals.length, 0);
+      assert.equal(result.sellSignals.length, 0);
+      assert.equal(result.recentReports.length, 1);
+      assert.equal(result.recentReports[0]?.raw_result, null);
+      assert.equal(result.recentReports[0]?.action, null);
+      assert.equal(record?.action, null);
+    },
+    { rawResultColumn: false },
+  );
+});
+
+test("querySlTpRecord returns prices independently of action validity", () => {
   withTempDb((dbPath, db) => {
     insertRecord(db, {
-      operation_advice: "持有",
-      trend_prediction: "看多",
       raw_result: "not json",
-      ideal_buy: 100,
+      stop_loss: 90,
+      take_profit: 120,
     });
 
-    const result = queryAll(dbPath);
+    const record = querySlTpRecord(dbPath, "AAPL");
 
-    assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.code, "AAPL");
-    assert.equal(result.buySignals[0]?.action, "buy");
-  });
-});
-
-test("queryAll falls back to legacy text rules when raw_result column is missing", () => {
-  withLegacyTempDb((dbPath, db) => {
-    insertLegacyRecord(db, {
-      operation_advice: "持有",
-      trend_prediction: "看多",
-      ideal_buy: 100,
-    });
-
-    const result = queryAll(dbPath);
-
-    assert.equal(result.buySignals.length, 1);
-    assert.equal(result.buySignals[0]?.code, "AAPL");
-    assert.equal(result.buySignals[0]?.action, "buy");
-    assert.equal(result.buySignals[0]?.raw_result, null);
+    assert.equal(record?.action, null);
+    assert.equal(record?.stop_loss, 90);
+    assert.equal(record?.take_profit, 120);
   });
 });

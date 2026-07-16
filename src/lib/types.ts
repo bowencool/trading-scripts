@@ -21,8 +21,6 @@ export interface AnalysisRecord {
   sentiment_score: number | null;
   /** Normalized action used by trading control flow. */
   action: AnalysisAction | null;
-  operation_advice: string | null;
-  trend_prediction: string | null;
   analysis_summary: string | null;
   raw_result: string | null;
   news_content: string | null;

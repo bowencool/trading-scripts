@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 从 SQLite 数据库读取分析报告（含情绪评分、操作建议、买卖价格）
+- 从只读 SQLite 数据库读取分析报告，以 `raw_result` 顶层 `action` 作为唯一交易信号来源
 - **实时持仓对比**：通过 Broker Adapter 获取持仓和活跃订单，与信号做对比，无需本地状态文件
 - 自动过滤 A 股，仅处理港股和美股标的
 - **智能取价**：通过 MarketDataProvider 获取盘口和分时段报价，优先使用卖一/买一，其次盘前/盘后价格，最后使用最新价
@@ -30,7 +30,7 @@ flowchart TD
   Config["Config<br/>CLI / env"] --> Factory["ProviderFactory"]
   Factory --> Market["MarketDataProvider<br/>盘口 / 分时段报价 / 最新价"]
   Factory --> Broker["BrokerAdapter<br/>账户 / 持仓 / 订单"]
-  DB["analysis_history (DB)"] --> Signals["queryAll()<br/>买入 / 加仓 / 卖出 / 减仓<br/>看多 / 强烈看多 / 看空 / 强烈看空"]
+  DB["analysis_history （只读 DB）"] --> Signals["queryAll()<br/>raw_result.action 八态<br/>buy / add / reduce / sell<br/>hold / watch / avoid / alert"]
   Market --> Execute
   Broker --> Snapshot["provider-neutral snapshot<br/>持仓 / 活跃订单 / 已成交 SL/TP"]
 
@@ -49,19 +49,34 @@ flowchart TD
   Execute --> Maintenance["SYNC / RECOVER / MERGE / UPDATE / CANCEL<br/>同步、补挂、合并、改价或撤单"]
 ```
 
-**Action 类型**
+**信号 action**
+
+| `raw_result.action` | 信号归类 | 交易含义 |
+| --- | --- | --- |
+| `buy` | 买入侧 | 无持仓时新建买入；已有持仓时不自动加仓 |
+| `add` | 买入侧 | 已持仓时加仓；无持仓时按新建买入处理 |
+| `reduce` | 卖出侧 | 按 `SELL_PCT` 部分减仓 |
+| `sell` | 卖出侧 | 全仓卖出 |
+| `hold` | 中性 | 不执行买卖 |
+| `watch` | 中性 | 不执行买卖 |
+| `avoid` | 中性 | 不执行买卖 |
+| `alert` | 中性 | 不执行买卖 |
+
+**执行 Action 类型**
 
 | Action | 条件 | 行为 |
 | --- | --- | --- |
-| `NEW_BUY` | 不持仓 + 买入信号（买入，或持有/观望/空建议 + 看多/强烈看多）+ 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
-| `ADD_POSITION` | 已持仓 + 信号=加仓 + 无 pending 买单 | 限价加仓，成交后将 SL/TP 同步到新总持仓 |
+| `NEW_BUY` | 不持仓 + `action=buy/add` + `ideal_buy` 有效 + 无 pending 买单 | 限价买入，成交后自动挂 SL/TP |
+| `ADD_POSITION` | 已持仓 + `action=add` + `ideal_buy` 有效 + 无 pending 买单 | 限价加仓，成交后将 SL/TP 同步到新总持仓 |
 | `UPDATE_BUY` | 有 pending 买单 + 信号价格不一致 | `replaceOrder` 同步 |
-| `SELL_FULL` | 持仓 + 卖出信号（卖出，或持有/观望/空建议 + 看空/强烈看空） | 取消 SL/TP → 限价卖出（挂买一） |
-| `SELL_PARTIAL` | 持仓 + 信号=减仓 | 取消 SL/TP → 限价卖 sellPct%（挂买一） |
+| `SELL_FULL` | 持仓 + `action=sell` | 取消 SL/TP → 限价卖出（挂买一） |
+| `SELL_PARTIAL` | 持仓 + `action=reduce` | 取消 SL/TP → 限价卖 sellPct%（挂买一） |
 | `SYNC_SL_TP` | 持仓 + SL/TP 数量或价格 ≠ 信号 | `replaceOrder` 调整数量和/或价格 |
 | `RECOVER_SL_TP` | 持仓 + 无 SL/TP + 信号有止损止盈 | 补挂 MIT + LIT |
 | `MERGE_SL_TP` | 持仓 + 同侧有多张止损/止盈挂单 | 先撤重复单，再按最新信号重挂一对 |
 | `HOLD` | 持仓 + SL/TP 已匹配 | 不操作 |
+
+`action` 会先去除首尾空白并转为小写。缺失、非字符串、未知值或非法 `raw_result` JSON 均不产生交易信号；不会从其他字段推断，也不会回退到同一股票更早的报告。中性或无效 action 的报告仍可用于持仓 SL/TP 价格恢复。
 
 ## 快速开始
 
