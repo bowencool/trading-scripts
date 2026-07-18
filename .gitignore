@@ -153,3 +153,5 @@ stock_analysis.db
 *.db-wal
 
 .claude/
+cache/
+.llm_usage*
